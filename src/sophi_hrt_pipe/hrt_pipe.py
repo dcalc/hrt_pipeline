@@ -486,7 +486,7 @@ def phihrt_pipe(input_json_file):
 
         data = prefilter_correction(data,voltagesData_arr,prefilter[rows,cols],prefilter_voltages)
         # 20221011 test for flat with no cavity and PF
-        # flat = prefilter_correction(flat[...,np.newaxis],[voltagesData_flat],prefilter,prefilter_voltages)[...,0]
+        flat = prefilter_correction(flat[...,np.newaxis],[voltagesData_flat],prefilter,prefilter_voltages)[...,0]
         
         for hdr in hdr_arr:
             hdr['CAL_PRE'] = prefilter_f
@@ -883,9 +883,9 @@ def phihrt_pipe(input_json_file):
         if not iss_off or not PSFstokes:
             data *= field_stop[rows,cols, np.newaxis, np.newaxis, np.newaxis]
             # DC change 20211019 only for limb
-            if norm_stokes:
-                if limb:
-                    data *= limb_mask[:,:, np.newaxis, np.newaxis]
+            # if norm_stokes:
+            #     if limb:
+            #         data *= limb_mask[:,:, np.newaxis, np.newaxis]
 
     else:
         print(" ")
@@ -925,9 +925,9 @@ def phihrt_pipe(input_json_file):
         if not iss_off or not PSFstokes:
             data *= field_stop[rows,cols, np.newaxis, np.newaxis, np.newaxis]
             # DC change 20211019 only for limb
-            if norm_stokes:
-                if limb:
-                    data *= limb_mask[:,:, np.newaxis, np.newaxis]
+            # if norm_stokes:
+            #     if limb:
+            #         data *= limb_mask[:,:, np.newaxis, np.newaxis]
 
     else:
         print(" ")
@@ -1002,9 +1002,9 @@ def phihrt_pipe(input_json_file):
         
         if not PSFstokes:
             data *= field_stop[rows,cols, np.newaxis, np.newaxis, np.newaxis]
-            if norm_stokes:
-                if limb:
-                    data *= limb_mask[:,:, np.newaxis, np.newaxis]
+            # if norm_stokes:
+            #     if limb:
+            #         data *= limb_mask[:,:, np.newaxis, np.newaxis]
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
         printc(f"------------- Registration time: {np.round(time.perf_counter() - start_time,3)} seconds ",bcolors.OKGREEN)
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
@@ -1027,9 +1027,9 @@ def phihrt_pipe(input_json_file):
             hdr_arr[scan]['CAL_PSF'] = PSForbit+'; aberration: '+str(PSFaberr)
 
         data *= field_stop[rows,cols, np.newaxis, np.newaxis, np.newaxis]
-        if norm_stokes:
-            if limb:
-                data *= limb_mask[:,:, np.newaxis, np.newaxis]
+        # if norm_stokes:
+        #     if limb:
+        #         data *= limb_mask[:,:, np.newaxis, np.newaxis]
 
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
         printc(f"------------- PSF deconvolution time: {np.round(time.perf_counter() - start_time,3)} seconds ",bcolors.OKGREEN)

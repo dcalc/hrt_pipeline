@@ -500,33 +500,47 @@ def center_coord(hdr):
     
     return center
 
+def circular_mask(h, w, center, radius):
+
+    Y, X = np.ogrid[:h, :w]
+    dist_from_center = np.sqrt((X - center[0])**2 + (Y-center[1])**2)
+
+    mask = dist_from_center <= radius
+    return mask
+
 def limb_side_finder(img, hdr,verbose=True):
     Rpix=(hdr['RSUN_ARC']/hdr['CDELT1'])
     # center=[hdr['CRPIX1']-hdr['CRVAL1']/hdr['CDELT1']-1,hdr['CRPIX2']-hdr['CRVAL2']/hdr['CDELT2']-1]
     center = center_coord(hdr)[:2] - 1
+    limb_wcs = circular_mask(hdr['PXEND2']-hdr['PXBEG2']+1,
+                             hdr['PXEND1']-hdr['PXBEG1']+1,center,Rpix)
     
-    x_p = img.shape[1] - (center[0]+np.sqrt(Rpix**2 - (center[1]-img.shape[0])**2))
-    y_p = img.shape[0] - (center[1]+np.sqrt(Rpix**2 - (center[0]-img.shape[1])**2))
-    x_n = center[0]-np.sqrt(Rpix**2 - center[1]**2)
-    y_n = center[1]-np.sqrt(Rpix**2 - center[0]**2)
+    sixth = int(limb_wcs.shape[0]//6)
+    
+    finder = np.zeros((6,6))
+    for i in range(6):
+        for j in range(6):
+            finder[i,j] = np.sum(~limb_wcs[sixth*i:sixth*(i+1),sixth*j:sixth*(j+1)])
 
-    
-    side = ''
-    if x_p > 0: 
-        side += 'W'
-    elif x_n > 0:
-        side += 'E'
-    if y_p > 0:
-        side += 'N'
-    if y_n > 0:
-        side += 'S'
-    
-    if verbose:
-        if side == '':
-            print('Limb is not in the FoV according to WCS keywords')
-        else:
-            print('Limb side:',side)
+    sides = dict(E=0,N=0,W=0,S=0)
 
+    sides['E'] = np.sum(finder[:,0:2])
+    sides['W'] = np.sum(finder[:,4:])
+    sides['S'] = np.sum(finder[0:2])
+    sides['N'] = np.sum(finder[4:])
+
+    finder[0,0] = 0
+    finder[0,-1] = 0
+    finder[-1,0] = 0
+    finder[-1,-1] = 0
+
+    if np.sum(finder>0) > 3:
+        side = list(sides.keys())[np.argmax(sides)]
+        print('Limb side:',side)
+    else:
+        side = ''
+        print('Limb is not in the FoV according to WCS keywords')
+    
     ds = 256
     if hdr['DSUN_AU'] < 0.4:
         if side == '':
@@ -577,13 +591,6 @@ def limb_fitting(img, hdr, mar=200, verbose=True):
         x_new = np.arange(len(y), step=1./m)
         return fn(x_new)
     
-    def _circular_mask(h, w, center, radius):
-
-        Y, X = np.ogrid[:h, :w]
-        dist_from_center = np.sqrt((X - center[0])**2 + (Y-center[1])**2)
-
-        mask = dist_from_center <= radius
-        return mask
     
     def _image_derivative(d):
         import numpy as np
@@ -605,7 +612,7 @@ def limb_fitting(img, hdr, mar=200, verbose=True):
     
     side, center, Rpix, sly, slx = limb_side_finder(img,hdr,verbose=verbose)
     
-    wcs_mask = _circular_mask(img.shape[0],img.shape[1],center,Rpix)
+    wcs_mask = circular_mask(img.shape[0],img.shape[1],center,Rpix)
     wcs_grad = _image_derivative(wcs_mask)
         
     if side == '':
@@ -623,7 +630,16 @@ def limb_fitting(img, hdr, mar=200, verbose=True):
         norm = 1
     
     if mode == 'columns':
-        xi = np.arange(100,img.shape[1]-50,50)
+        xedge = int(np.sqrt(Rpix**2 - (0 - center[1])**2) + center[0])
+        if xedge > 0 and xedge < img.shape[0]:
+            if np.sum(~wcs_mask[xedge:]) > np.sum(~wcs_mask[:xedge]):
+                x0 = xedge + 150; x1 = img.shape[1]-50
+            else:
+                x1 = xedge - 50; x0 = 100
+        else:
+            x0 = 100; x1 = img.shape[1]-50
+            
+        xi = np.arange(x0,x1,50)
         yi = []
         m = 10
         for c in xi:
@@ -641,13 +657,22 @@ def limb_fitting(img, hdr, mar=200, verbose=True):
             g = np.gradient(col*norm)
             gi = _interp(g,m)
             
-            yi += [gi.argmax()/m+y_start-mar]
+            yi += [gi.argmax()/m+r0]
         yi = np.asarray(yi)
         xi = xi[~_is_outlier(yi)]
         yi = yi[~_is_outlier(yi)]
     
     elif mode == 'rows':
-        yi = np.arange(100,img.shape[0]-50,50)
+        yedge = int(np.sqrt(Rpix**2 - (0 - center[0])**2) + center[1])
+        if yedge > 0 and yedge < img.shape[0]:
+            if np.sum(~wcs_mask[yedge:]) > np.sum(~wcs_mask[:yedge]):
+                y0 = yedge + 150; y1 = img.shape[0]-50
+            else:
+                y1 = yedge - 50; y0 = 100
+        else:
+            y0 = 100; y1 = img.shape[0]-50
+            
+        yi = np.arange(y0,y1,50)
         xi = []
         m = 10
         for r in yi:
@@ -665,19 +690,17 @@ def limb_fitting(img, hdr, mar=200, verbose=True):
             g = np.gradient(row*norm)
             gi = _interp(g,m)
             
-            xi += [gi.argmax()/m+x_start-mar]
+            xi += [gi.argmax()/m+c0]
         xi = np.asarray(xi)
-        out_one = _is_outlier(xi)
-        out_two = ~out_one
+        
         yi = yi[~_is_outlier(xi)]
         xi = xi[~_is_outlier(xi)]
 
-
     p = optimize.least_squares(_residuals,x0 = [center[0],center[1],Rpix], args=(xi,yi))
-        
-    mask80 = _circular_mask(img.shape[0],img.shape[1],[p.x[0],p.x[1]],p.x[2]*.8)
-#     return _circular_mask(img.shape[0],img.shape[1],[p.x[0],p.x[1]],p.x[2]), mask80, side
-    return _circular_mask(img.shape[0],img.shape[1],[p.x[0],p.x[1]],p.x[2]), sly, slx, side
+    
+    mask80 = circular_mask(img.shape[0],img.shape[1],[p.x[0],p.x[1]],p.x[2]*.8)
+#     return circular_mask(img.shape[0],img.shape[1],[p.x[0],p.x[1]],p.x[2]), mask80, side
+    return circular_mask(img.shape[0],img.shape[1],[p.x[0],p.x[1]],p.x[2]), sly, slx, side
 
 def fft_shift(img,shift):
     """

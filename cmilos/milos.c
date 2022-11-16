@@ -150,7 +150,8 @@ void call_milos(const int *options, size_t size, const double *waveaxis, const d
 	double slight;
 	double toplim;
 	int miter;
-	PRECISION weight[4]={1.,10.,10.,4.};
+	// PRECISION weight[4]={1.,10.,10.,4.};
+	PRECISION weight[4]={1.,4.,5.4,4.1}; // New weights from 20221116
 	// PRECISION weight[4]={1.,12.,12.,10.};
 	int nweight;
 
@@ -240,7 +241,7 @@ void call_milos(const int *options, size_t size, const double *waveaxis, const d
 		cnt_model = 0;
 		long n_profiles;
 		n_profiles = size/4/NLAMBDA;
-		printf("profiles to invert = %d\n",n_profiles);
+		// printf("profiles to invert = %d\n",n_profiles);
 		do{
 			nsub=0;
 			neje=0;
@@ -432,7 +433,8 @@ int main(int argc,char **argv){
 	double slight;
 	double toplim;
 	int miter;
-	PRECISION weight[4]={1.,10.,10.,4.};
+	// PRECISION weight[4]={1.,10.,10.,4.};
+	PRECISION weight[4]={1.,4.,5.4,4.1}; // New weights from 20221116
 	int nweight;
 
 	clock_t t_ini, t_fin;
