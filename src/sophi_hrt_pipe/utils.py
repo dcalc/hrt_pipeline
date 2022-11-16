@@ -630,7 +630,10 @@ def limb_fitting(img, hdr, mar=200, verbose=True):
         norm = 1
     
     if mode == 'columns':
-        xedge = int(np.sqrt(Rpix**2 - (0 - center[1])**2) + center[0])
+        try:
+            xedge = int(np.sqrt(Rpix**2 - (0 - center[1])**2) + center[0])
+        except:
+            xedge = 0
         if xedge > 0 and xedge < img.shape[0]:
             if np.sum(~wcs_mask[xedge:]) > np.sum(~wcs_mask[:xedge]):
                 x0 = xedge + 150; x1 = img.shape[1]-50
@@ -663,7 +666,10 @@ def limb_fitting(img, hdr, mar=200, verbose=True):
         yi = yi[~_is_outlier(yi)]
     
     elif mode == 'rows':
-        yedge = int(np.sqrt(Rpix**2 - (0 - center[0])**2) + center[1])
+        try:
+            yedge = int(np.sqrt(Rpix**2 - (0 - center[0])**2) + center[1])
+        except:
+            yedge = 0
         if yedge > 0 and yedge < img.shape[0]:
             if np.sum(~wcs_mask[yedge:]) > np.sum(~wcs_mask[:yedge]):
                 y0 = yedge + 150; y1 = img.shape[0]-50

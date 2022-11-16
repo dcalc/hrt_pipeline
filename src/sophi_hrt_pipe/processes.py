@@ -621,7 +621,7 @@ def CT_ItoQUV(data, ctalk_params, norm_stokes, cpos_arr, Ic_mask):
     return data
 
 
-def hot_pixel_mask(data, rows, cols,mode='median'):
+def hot_pixel_mask(data, rows, cols, mode='median'):
     """
     Apply hot pixel mask to the data, just after cross talk to remove pixels that diverge
     """
@@ -644,8 +644,9 @@ def hot_pixel_mask(data, rows, cols,mode='median'):
     
     for i in range(1,l+1):
         bad = (hot_pix_mask[rows,cols] == i)
-        med = (hot_pix_cont[rows,cols] == i)
-        data[bad] = func(data[med])
+        if np.sum(bad) > 0:
+            med = (hot_pix_cont[rows,cols] == i)
+            data[bad] = func(data[med])
     
     return data
 
