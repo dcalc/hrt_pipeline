@@ -126,6 +126,7 @@ def phihrt_pipe(input_json_file):
     # READ INPUT JSON
     #-----------------
     
+    start_proc = time.strftime('%Y%m%d%H%M')
     input_dict = json.load(open(input_json_file))
 
     try:
@@ -203,7 +204,7 @@ def phihrt_pipe(input_json_file):
         avg_stokes_before_rte = False
         if 'vers' not in input_dict:
             # vrs = '01'
-            vrs = time.strftime('%Y%m%d%H%M')
+            vrs = start_proc
         else:
             vrs = input_dict['vers']
             if len(vrs) != 2:
@@ -1041,10 +1042,10 @@ def phihrt_pipe(input_json_file):
         print(" ")
         printc('-->>>>>>> Saving copy of input config file ',color=bcolors.OKGREEN)
 
-        dt = datetime.datetime.fromtimestamp(overall_time)
-        runtime = dt.strftime("%d_%m_%YT%H_%M_%S")
+        # dt = datetime.datetime.fromtimestamp(overall_time)
+        # runtime = dt.strftime("%d_%m_%YT%H_%M_%S")
 
-        json.dump(input_dict, open(out_dir + f"config_file_{runtime}.json", "w"))
+        json.dump(input_dict, open(out_dir + f"config_file_{start_proc}.json", "w"))
         
     print(" ")
     printc('--------------------------------------------------------------',color=bcolors.OKGREEN)
