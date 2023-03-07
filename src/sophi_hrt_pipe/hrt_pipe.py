@@ -115,7 +115,7 @@ def phihrt_pipe(input_json_file):
     SPGYlib
 
     '''
-    version = 'V1.6.2 February 6th 2023'
+    version = 'V1.6.3 March 7th 2023'
 
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
     printc('PHI HRT data reduction software  ',bcolors.OKGREEN)
@@ -136,9 +136,14 @@ def phihrt_pipe(input_json_file):
 
         #input/output type + scaling
         L1_input = input_dict['L1_input']
-        scale_data = input_dict['scale_data']
-        accum_scaling = input_dict['accum_scaling']
-        bit_conversion = input_dict['bit_conversion']
+        if L1_input:
+            accum_scaling = True 
+            bit_conversion = True
+            scale_data = True
+        else:
+            scale_data = input_dict['scale_data']
+            accum_scaling = input_dict['accum_scaling']
+            bit_conversion = input_dict['bit_conversion']
 
         #reduction
         dark_c = input_dict['dark_c']
@@ -149,12 +154,17 @@ def phihrt_pipe(input_json_file):
             TemperatureCorrection = input_dict['TemperatureCorrection']
         norm_f = input_dict['norm_f']
         clean_f = input_dict['clean_f']
-        sigma = input_dict['sigma']
-        clean_mode = input_dict['clean_mode']
+        if clean_f:
+            sigma = input_dict['sigma']
+            clean_mode = input_dict['clean_mode']
         flat_states = input_dict['flat_states']
         prefilter_f = input_dict['prefilter_f']
-        fs_c = input_dict['fs_c']
-        iss_off = input_dict['iss_off']
+        if 'fs_c' in input_dict:
+            fs_c = input_dict['fs_c']
+        else:
+            fs_c = True
+        if 'iss_off' in input_dict:
+            iss_off = input_dict['iss_off']
         demod = input_dict['demod']
         norm_stokes = input_dict['norm_stokes']
         ItoQUV = input_dict['ItoQUV']
@@ -168,7 +178,10 @@ def phihrt_pipe(input_json_file):
         else:
             PSFstokes = False
 
-        ghost_c = input_dict['ghost_c']  #20211116
+        if 'ghost_c' in input_dict:
+            ghost_c = input_dict['ghost_c']  #20211116
+        else:
+            ghost_c = False
         cavity_f = input_dict['cavity_f']
         rte = input_dict['rte']
         out_intermediate = input_dict['out_intermediate']  #20211116
@@ -196,20 +209,15 @@ def phihrt_pipe(input_json_file):
             if len(vrs) != 2:
                 printc("WARNING: Version string is larger than 2 digits",color=bcolors.WARNING)
         #behaviour if clean mode is set to None (null in json)
-        if clean_mode is None:
-            clean_mode = "V" 
+        if 'clean_mode' in locals():
+            if clean_mode is None:
+                clean_mode = "V" 
             
     except Exception as e:
         print(f"Missing key(s) in the input config file: {e}")
         raise KeyError
     
     overall_time = time.perf_counter()
-
-    if L1_input:
-        #print("L1_input param set to True - Assuming L1 science data")
-        accum_scaling = True 
-        bit_conversion = True
-        scale_data = True
 
     #-----------------
     # READ DATA
@@ -244,6 +252,18 @@ def phihrt_pipe(input_json_file):
 
             if 'IMGDIRX' in hdr_arr[scan] and hdr_arr[scan]['IMGDIRX'] == 'YES':
                 print(f"This scan has been flipped in the Y axis to conform to orientation standards. \n File: {data_f[scan]}")
+
+        #--------
+        # check if ISS is ON or OFF
+        #--------
+
+        if 'iss_off' not in locals():
+            if hdr_arr[0]['ISSMODE1'] == 'ISS_IDLE':
+                iss_off = True
+                printc('-->>>>>>> ISS is OFF',color=bcolors.OKGREEN) 
+            else:
+                iss_off = False
+                printc('-->>>>>>> ISS is ON',color=bcolors.OKGREEN) 
 
         #--------
         # test if the scans have different sizes
@@ -296,6 +316,8 @@ def phihrt_pipe(input_json_file):
         printc("WARNING: Dataset is cropped. Cropping will be considered the same for all the data", color=bcolors.WARNING)
         start_row = int(hdr_arr[0]['PXBEG2']-1)
         start_col = int(hdr_arr[0]['PXBEG1']-1)
+        # pxbeg1 and pxend1 do not take into account the inverted direction of the X axis in L1 data (FIXED)
+        # start_col = int((2048 - hdr_arr[0]['PXEND1'] + 1) - 1)
         
     else:
         start_row, start_col = 0, 0
@@ -419,6 +441,7 @@ def phihrt_pipe(input_json_file):
         data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],TemperatureCorrection=TemperatureCorrection)
         # DC 20221109 test for Smitha. PF already removed from the flat
         wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True)
+        wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0]) 
         flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],prefilter,TemperatureCorrection=TemperatureCorrection)[...,0]
         
         for hdr in hdr_arr:
@@ -869,6 +892,10 @@ def phihrt_pipe(input_json_file):
     for count, scan in enumerate(data_f):
         hdr_arr[count]['PARENT'] = hdr_arr[count]['FILENAME'] 
 
+    #write if the TemperatureCorrection is on or not
+    for count, scan in enumerate(data_f):
+        hdr_arr[count]['CAL_TEMP'] = str(TemperatureCorrection) 
+
     #these two ifs need to be outside out_stokes_file if statement - needed for inversion
     if out_dir[-1] != "/":
         print("Desired Output directory missing / character, will be added")
@@ -963,9 +990,9 @@ def phihrt_pipe(input_json_file):
                 file_suffix =  'flat_corrected'
                 write_out_intermediate(data_flatc[:,:,:,:,count], hdr_interm, history_str, scan, root_scan_name, file_suffix, out_dir)
                 #without US
-                root_scan_name_before_US = f"copy_{flat_f.split('/')[-1]}"
-                file_suffix = ''
-                write_out_intermediate(flat_copy, hdr_interm, history_str, scan, root_scan_name_before_US, file_suffix, out_dir)
+                # root_scan_name_before_US = f"copy_{flat_f.split('/')[-1]}"
+                # file_suffix = ''
+                # write_out_intermediate(flat_copy, hdr_interm, history_str, scan, root_scan_name_before_US, file_suffix, out_dir)
 
             if demod:
                 history_str = f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {False}. PSF deconvolution: {False}"
@@ -998,7 +1025,7 @@ def phihrt_pipe(input_json_file):
         if pymilos_opt:
             #weight = np.asarray([1.,4.,5.4,4.1]); initial_model = np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85])
             #py_cmilos(data_f, hdr_arr, wave_axis_arr, data_shape, cpos_arr, data, rte, mask, imgdirx_flipped, out_rte_filename, out_dir, weight = weight, initial_model = initial_model, vers = vrs)
-            py_cmilos(data_f, hdr_arr, wave_axis_arr, data_shape, cpos_arr, data, rte, mask, imgdirx_flipped, out_rte_filename, out_dir, vers = vrs)
+            py_cmilos(data_f, hdr_arr, wave_axis_arr, data_shape, cpos_arr, data, rte, mask, imgdirx_flipped, out_rte_filename, out_dir, cavity_f, vers = vrs)
         else:
             cmilos(data_f, hdr_arr, wave_axis_arr, data_shape, cpos_arr, data, rte, mask, imgdirx_flipped, out_rte_filename, out_dir, cavity_f, rows, cols, vers = vrs)
 

@@ -20,21 +20,21 @@ def setup_header(hdr_arr):
     hdr_arr
         Updated header array
     """
-    k = ['CAL_FLAT','CAL_USH','SIGM_USH',
+    k = ['CAL_FLAT','CAL_USH','SIGM_USH','CAL_TEMP',
     'CAL_PRE','CAL_GHST','CAL_PREG','CAL_REAL',
     'CAL_CRT0','CAL_CRT1','CAL_CRT2','CAL_CRT3','CAL_CRT4','CAL_CRT5',
     'CAL_CRT6','CAL_CRT7','CAL_CRT8','CAL_CRT9',
     'CAL_WREG','CAL_NORM','CAL_FRIN','CAL_PSF','CAL_IPOL',
     'CAL_SCIP','RTE_MOD','RTE_SW','RTE_ITER','VERS_CAL']
 
-    v = [0,' ',' ',
+    v = [0,' ',' ','False',
     ' ','None ','None','NA',
     0,0,0,0,0,0,
     0,0,0,0,
     'None',' ','NA','NA',' ',
     'None',' ',' ',4294967295, hdr_arr[0]['VERS_SW'][1:4]]
 
-    c = ['Onboard calibrated for gain table','Unsharp masking correction','Sigma for unsharp masking [px]',
+    c = ['Onboard calibrated for gain table','Unsharp masking correction','Sigma for unsharp masking [px]','Wavelengths correction for FG temperature',
     'Prefilter correction (DID/file)','Ghost correction (name + version of module)',
          'Polarimetric registration','Prealigment of images before demodulation',
     'cross-talk from I to Q (slope)','cross-talk from I to Q (offset)','cross-talk from I to U (slope)','cross-talk from I to U (offset)','cross-talk from I to V (slope)','cross-talk from I to V (offset)',
@@ -554,7 +554,9 @@ def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None,
     adapted from SPGPylibs
     """
     def _get_v1_index1(x):
-        index1, v1 = min(enumerate([abs(i) for i in x]), key=itemgetter(1))
+        # index1, v1 = min(enumerate([abs(i) for i in x]), key=itemgetter(1))
+        index1, v1 = min(enumerate(x), key = lambda i: abs(i[1]))
+        # return  x[index1], index1
         return  v1, index1
     
     if prefilter_voltages is None:
@@ -1397,6 +1399,89 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, leve
     
     return PDdf
 
+def solarRotation(hdr):
+    # vrot from hathaway et al., 2011, values in deg/day
+    # proper vlos projection without thetarho ~ 0 approximation from Schuck et al., 2016
+    X = ccd2HGS(hdr)
+    HPCx, HPCy, HPCd = ccd2HPC(hdr)
+    thetarho = np.arctan(np.sqrt(np.cos(HPCy*u.arcsec)**2*np.sin(HPCx*u.arcsec)**2+np.sin(HPCy*u.arcsec)**2) / 
+                      (np.cos(HPCy*u.arcsec)*np.cos(HPCx*u.arcsec)))
+    psi = np.arctan(-(np.cos(HPCy*u.arcsec)*np.sin(HPCx*u.arcsec)) / np.sin(HPCy*u.arcsec))
+    psi[np.logical_and(HPCy>=0,HPCx<0)] += 0 * u.rad
+    psi[np.logical_and(HPCy<0,HPCx<0)] += np.pi * u.rad
+    psi[np.logical_and(HPCy<0,HPCx>=0)] += np.pi * u.rad
+    psi[np.logical_and(HPCy>=0,HPCx>=0)] += 2*np.pi * u.rad
+    
+    a = (14.437 * u.deg/u.day).to(u.rad/u.s); 
+    b = (-1.48 * u.deg/u.day).to(u.rad/u.s); 
+    c = (-2.99 * u.deg/u.day).to(u.rad/u.s); 
+    vrot = (a + b*np.sin(X[1]*u.deg)**2 + c*np.sin(X[1]*u.deg)**4)*np.cos(X[1]*u.deg)* hdr['RSUN_REF'] * u.m/u.rad
+    B0 = hdr['HGLT_OBS']*u.deg
+    THETA = (X[1])*u.deg # lat
+    PHI = (X[2]-hdr['HGLN_OBS'])*u.deg # lon
+    It = -np.cos(B0)*np.sin(PHI)*np.cos(thetarho) + \
+         (np.cos(PHI)*np.sin(psi)-np.sin(B0)*np.sin(PHI)*np.cos(psi))*np.sin(thetarho)
+    vlos = -(vrot) * It
+    
+    return vlos.value
+
+def SCVelocityResidual(hdr,wlcore):
+    # s/c velocity signal (considering line shift compensation)
+#     X = ccd2HGS(hdr)
+    HPCx, HPCy, HPCd = ccd2HPC(hdr)
+    thetarho = np.arctan(np.sqrt(np.cos(HPCy*u.arcsec)**2*np.sin(HPCx*u.arcsec)**2+np.sin(HPCy*u.arcsec)**2) / 
+                      (np.cos(HPCy*u.arcsec)*np.cos(HPCx*u.arcsec)))
+    psi = np.arctan(-(np.cos(HPCy*u.arcsec)*np.sin(HPCx*u.arcsec)) / np.sin(HPCy*u.arcsec))
+    psi[np.logical_and(HPCy>=0,HPCx<0)] += 0 * u.rad
+    psi[np.logical_and(HPCy<0,HPCx<0)] += np.pi * u.rad
+    psi[np.logical_and(HPCy<0,HPCx>=0)] += np.pi * u.rad
+    psi[np.logical_and(HPCy>=0,HPCx>=0)] += 2*np.pi * u.rad
+
+    vsc = hdr['OBS_VW']*np.sin(thetarho)*np.sin(psi) - hdr['OBS_VN']*np.sin(thetarho)*np.cos(psi) + hdr['OBS_VR']*np.cos(thetarho)
+    c = 299792.458
+    wlref = 6173.341
+    vsc_compensation = (wlcore-wlref)/wlref*c*1e3
+    
+    return vsc.value - vsc_compensation
+
+def meridionalFlow(hdr):
+    # from hathaway et al., 2011, values in m/s
+    # proper vlos projection without thetarho ~ 0 approximation from Schuck et al., 2016
+    X = ccd2HGS(hdr)
+    HPCx, HPCy, HPCd = ccd2HPC(hdr)
+    thetarho = np.arctan(np.sqrt(np.cos(HPCy*u.arcsec)**2*np.sin(HPCx*u.arcsec)**2+np.sin(HPCy*u.arcsec)**2) / 
+                      (np.cos(HPCy*u.arcsec)*np.cos(HPCx*u.arcsec)))
+    psi = np.arctan(-(np.cos(HPCy*u.arcsec)*np.sin(HPCx*u.arcsec)) / np.sin(HPCy*u.arcsec))
+    psi[np.logical_and(HPCy>=0,HPCx<0)] += 0 * u.rad
+    psi[np.logical_and(HPCy<0,HPCx<0)] += np.pi * u.rad
+    psi[np.logical_and(HPCy<0,HPCx>=0)] += np.pi * u.rad
+    psi[np.logical_and(HPCy>=0,HPCx>=0)] += 2*np.pi * u.rad
+    
+    d = 29.7 * u.m/u.s; e = -17.7 * u.m/u.s; 
+    vmer = (d*np.sin(X[1]*u.deg) + e*np.sin(X[1]*u.deg)**3)*np.cos(X[1]*u.deg)
+    B0 = hdr['HGLT_OBS']*u.deg
+    THETA = (X[1])*u.deg
+    PHI = (X[2]-hdr['HGLN_OBS'])*u.deg
+    It = (np.sin(B0)*np.cos(THETA) - np.cos(B0)*np.cos(PHI)*np.sin(THETA))*np.cos(thetarho) - \
+        (np.sin(PHI)*np.sin(THETA)*np.sin(psi) + \
+        (np.sin(B0)*np.cos(PHI)*np.sin(THETA) + np.cos(B0)*np.cos(THETA))*np.cos(psi))*np.sin(thetarho)
+    
+    vlos = (-vmer) * It
+    
+    return vlos.value
+
+def SCGravitationalRedshift(hdr):
+    # ok
+    # gravitational redshift (theoretical) from a distance dsun from the sun
+    dsun = hdr['DSUN_OBS'] # m
+    c = 299792.458e3 # m/s
+    Rsun = hdr['RSUN_REF'] # m
+    Msun = 1.9884099e30 # kg
+    G = 6.6743e-11 # m3/kg/s2
+    vg = G*Msun/c * (1/Rsun - 1/dsun)
+    
+    return vg
+
 def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True,prefilter_f=None,solar_rotation=True):
     """
     Cavity Map computation from flat field.
@@ -1485,16 +1570,21 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True,pr
 
         return CM
 
-    def CMvlos(hdr):
-
-        X = ccd2HGS(hdr)
-        a = 2.894e-6 * u.rad/u.s; b = -0.428e-6 * u.rad/u.s; c = -0.370e-6 * u.rad/u.s; 
-        vrot = (a + b*np.sin(X[1]*u.deg)**2 + c*np.sin(X[1]*u.deg)**4)*np.cos(X[1]*u.deg)* 695700000. * u.m/u.rad
-        vlos = (vrot)*np.sin((X[2]-hdr['HGLN_OBS'])*u.deg)*np.cos(hdr['CRLT_OBS']*u.deg)
+    def CMvlos(hdr,wlcore):
+        # updated on 6/3/2023
+#         X = ccd2HGS(hdr)
+#         a = 2.894e-6 * u.rad/u.s; b = -0.428e-6 * u.rad/u.s; c = -0.370e-6 * u.rad/u.s; 
+#         vrot = (a + b*np.sin(X[1]*u.deg)**2 + c*np.sin(X[1]*u.deg)**4)*np.cos(X[1]*u.deg)* 695700000. * u.m/u.rad
+#         vlos = (vrot)*np.sin((X[2]-hdr['HGLN_OBS'])*u.deg)*np.cos(hdr['CRLT_OBS']*u.deg)
+        
+        vrot = solarRotation(hdr)
+        vmer = meridionalFlow(hdr)
+        vgr = SCGravitationalRedshift(hdr)
+        vsc = SCVelocityResidual(hdr,wlcore)
 
         c = 299792.458
         wlref = 6173.341
-        wlvlos = (vlos.value*1e-3*wlref/c)
+        wlvlos = ((vrot+vmer+vgr+vsc)*1e-3*wlref/c)
 
         return wlvlos
 
@@ -1528,7 +1618,7 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True,pr
     
     if solar_rotation:
         print("Removing signal of the solar rotation according to WCS Keywords in the flat header")
-        rotation = CMvlos(hh[0].header)
+        rotation = CMvlos(hh[0].header,wl[cpos-3])
         CM -= rotation
     
     print("Saving Cavity Maps")
@@ -1548,6 +1638,7 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True,pr
             if solar_rotation:
                 hdr[0].header['HISTORY'] = 'Solar rotation removed from the cavity'
                 hdr[0].header['HISTORY'] = 'Parameters: a = 2.894e-6 * u.rad/u.s; b = -0.428e-6 * u.rad/u.s; c = -0.370e-6 * u.rad/u.s; '
+                hdr[0].header['HISTORY'] = 'Parameters from Hathaway et al. 2011, LoS reprojection from Schuck et al. 2016, Solar Rotation + Merdional Flow + Gravitational Redshift + S/C velocity offset '
             hdr.writeto(out_name,overwrite=True)
 
     return CM

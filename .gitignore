@@ -55,3 +55,10 @@ cmilos/milos
 .vscode/settings.json
 .vscode
 .Trash*
+pymilos/pymilos.c
+pymilos/pymilos.cpython*
+pymilos/build/
+pymilos/build/*
+pymilos/pymilos.egg-info/
+pymilos/pymilos.egg-info/*
+

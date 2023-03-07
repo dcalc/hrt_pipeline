@@ -16,24 +16,23 @@ make
 
 cd ..
 
-cd ./cmilos-fits
-make clear 
-make
-
-cd ..
-
-cd p-milos
+cd pymilos/lib
 make clean
 make
-
-cd ..
+cd ../
+make clean
+make
+cd ../
 
 conda env create -f environment.yml
 #pip install -r requrements.txt
 
 source activate hrt_pipeline_env
 
+cd pymilos
+conda develop .
+#or 'pip install .'
+cd ..
+
 conda develop . 
 #or 'pip install .'
-
-cd pymilos; pip install -e .; cd ..

@@ -134,7 +134,7 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
         hdu_list.writeto(out_dir+filename_root+'_rte_data_products.fits.gz', overwrite=True)
 	
     #blos
-    print(blos_file, bmag_file, binc_file)
+    print(blos_file)
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = blos_file
         hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
@@ -150,6 +150,7 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
         hdu_list.writeto(out_dir+blos_file, overwrite=True)
 
     #bazi
+    print(bazi_file)
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = bazi_file
         hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
@@ -165,6 +166,7 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
         hdu_list.writeto(out_dir+bazi_file, overwrite=True)
 
     #binc
+    print(binc_file)
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = binc_file
         hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
@@ -180,6 +182,7 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
         hdu_list.writeto(out_dir+binc_file, overwrite=True)
 
     #bmag
+    print(bmag_file)
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = bmag_file
         hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
@@ -195,6 +198,7 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
         hdu_list.writeto(out_dir+bmag_file, overwrite=True)
 
     #vlos
+    print(vlos_file)
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = vlos_file
         hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
@@ -210,6 +214,7 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
         hdu_list.writeto(out_dir+vlos_file, overwrite=True)
     
     #chi2
+    print(chi2_file)
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = chi2_file
         hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
@@ -225,6 +230,7 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
         hdu_list.writeto(out_dir+chi2_file, overwrite=True)
 
     #Icnt
+    print(icnt_file)
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = icnt_file
         hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
@@ -556,8 +562,7 @@ def run_pymilos(data,wave_axis,rte,cpos,options = np.asarray([6,15,0,0]),cavity_
 
     print('It is assumed the wavelength array is given by the hdr')
     print("Wave axis is: ", (wave_axis - wavelength)*1000.)
-    print('Saving data into dummy_in.txt for RTE input')
-
+    
     if data.ndim == 4:
         sdata = data
     elif data.ndim != 4:

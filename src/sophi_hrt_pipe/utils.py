@@ -689,10 +689,14 @@ def center_coord(hdr):
     pxend1 = hdr['PXEND1']
     pxbeg2 = hdr['PXBEG2']
     pxend2 = hdr['PXEND2']
-    coord=np.asarray([hdr['CRPIX1'],
-            hdr['CRPIX2'],
+    coord=np.asarray([hdr['CRPIX1']-1,
+            hdr['CRPIX2']-1,
            1])
-
+    # X axis flipping is not considered in PXEND1, PXBEG1 and CRPIX1 (FIXED)
+    # coord=np.asarray([(2048 - (hdr['CRPIX1'] + hdr['PXBEG1']) + 1) - 1,
+    #         hdr['CRPIX2']-1,
+    #        1])
+    
     angle = hdr['CROTA'] # positive angle = clock-wise rotation of the reference system axes 
     rad = angle * np.pi/180
     rot = np.asarray([[np.cos(rad),-np.sin(rad),0],[np.sin(rad),np.cos(rad),0],[0,0,1]])
@@ -1562,7 +1566,7 @@ def rotate_header(h,angle):
     
     return h
     
-def translate_header(h,tvec):
+def translate_header(h,tvec,mode='crpix'):
     """calculate new header when image is translated by a fixed vector
 
     Parameters
@@ -1577,12 +1581,20 @@ def translate_header(h,tvec):
     h: astropy.io.fits.header.Header
         new header
     """
-    tr = np.asarray([[1,0,-tvec[1]*h['CDELT1']],[0,1,-tvec[0]*h['CDELT2']],[0,0,1]])
-    coords = np.asarray([h['CRVAL1'],h['CRVAL2'],1])
-    new_coords = tr @ coords
-    h['CRVAL1'] = round(new_coords[0],4)
-    h['CRVAL2'] = round(new_coords[1],4)
-    
+    if mode == 'crval':
+        tr = np.asarray([[1,0,-tvec[1]*ht['CDELT1']],[0,1,-tvec[0]*ht['CDELT2']],[0,0,1]])
+        coords = np.asarray([h['CRVAL1'],h['CRVAL2'],1])
+        new_coords = tr @ coords
+        h['CRVAL1'] = round(new_coords[0],4)
+        h['CRVAL2'] = round(new_coords[1],4)
+    elif mode == 'crpix':
+        tr = np.asarray([[1,0,tvec[1]],[0,1,tvec[0]],[0,0,1]])
+        coords = np.asarray([h['CRPIX1'],h['CRPIX2'],1])
+        new_coords = tr @ coords
+        h['CRPIX1'] = round(new_coords[0],4)
+        h['CRPIX2'] = round(new_coords[1],4)
+    else:
+        print('mode not valid\nreturn old header')
     return h
 
 def remap(hrt_map, hmi_map, out_shape = (1024,1024), verbose = False):
@@ -1939,50 +1951,6 @@ def load_l2_rte(directory,did,version=None):
     rte_out = np.asarray(rte_out)
     
     return rte_out
-
-def center_coord(hdr):
-    """
-    input
-    hdr: header
-    
-    output
-    center: [x,y,1] coordinates of the solar disk center (units: pixel)
-    """
-    pxbeg1 = hdr['PXBEG1']
-    pxend1 = hdr['PXEND1']
-    pxbeg2 = hdr['PXBEG2']
-    pxend2 = hdr['PXEND2']
-    coord=np.asarray([hdr['CRPIX1']-1,
-            hdr['CRPIX2']-1,
-           1])
-    
-    angle = hdr['CROTA'] # positive angle = clock-wise rotation of the reference system axes 
-    rad = angle * np.pi/180
-    rot = np.asarray([[np.cos(rad),-np.sin(rad),0],[np.sin(rad),np.cos(rad),0],[0,0,1]])
-    rc = [(pxend1-pxbeg1)/2,(pxend2-pxbeg2)/2] # CRPIX from 1 to 2048, so 1024.5 is the center
-
-    tr = np.asarray([[1,0,rc[0]],[0,1,rc[1]],[0,0,1]])
-    invtr = np.asarray([[1,0,-rc[0]],[0,1,-rc[1]],[0,0,1]])
-    M = tr @ rot @ invtr
-
-    coord = (M @ coord)[:2]
-
-    # center of the sun in the rotated reference system
-    center=np.asarray([coord[0]-hdr['CRVAL1']/hdr['CDELT1'],
-                       coord[1]-hdr['CRVAL2']/hdr['CDELT2'],
-                       1])
-    # rotation of the sun center back to the original reference system
-    angle = -hdr['CROTA'] # positive angle = clock-wise rotation of the reference system axes 
-    rad = angle * np.pi/180
-    rot = np.asarray([[np.cos(rad),-np.sin(rad),0],[np.sin(rad),np.cos(rad),0],[0,0,1]])
-    
-    tr = np.asarray([[1,0,rc[0]],[0,1,rc[1]],[0,0,1]])
-    invtr = np.asarray([[1,0,-rc[0]],[0,1,-rc[1]],[0,0,1]])
-    M = tr @ rot @ invtr
-
-    center = (M @ center)
-    
-    return center
 
 def mu_angle(hdr,coord=None):
     """
