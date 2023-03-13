@@ -1418,6 +1418,8 @@ def stokes_noise(stokes_file, iter=True):
         Gaussian fit parameters
     """
     stokes = fits.getdata(stokes_file)
+    if stokes.shape[0] == 6:
+        stokes = np.einsum('lpyx->yxpl',stokes)
     hdr = fits.getheader(stokes_file)
     out = fits_get_sampling(stokes_file)
     cpos = out[3]
@@ -1437,16 +1439,17 @@ def stokes_noise(stokes_file, iter=True):
     #guassian fit + label
     p = gaussian_fit(tmp, show = False)    
     xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
-    lbl = f'{p[1]:.2e} $\pm$ {p[2]:.2e} G'
+    lbl = f'{p[1]:.2e} $\pm$ {p[2]:.2e}'
     
     if iter:
         try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,1.],eps=1e-4)
-            ax[1].plot(xx,gaus(xx,*p_iter),'r--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
+            p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6)
+            ax[1].plot(xx,gaus(xx,*p_iter),'r--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
             ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
         except:
             print("Iterative Gauss Fit failed")
             ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
+            p_iter = p
 
     else:
         ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
@@ -1524,7 +1527,7 @@ def und(hrt, order=1, flip = True):
         return hrt_und
 
 
-def rotate_header(h,angle):
+def rotate_header(h,angle,center = [1024.5,1024.5]):
     """calculate new header when image is rotated by a fixed angle
 
     Parameters
@@ -1533,6 +1536,8 @@ def rotate_header(h,angle):
         header of image to be rotated
     angle : float
         angle to rotate image by (in degrees)
+    center : list or numpy.array
+        center of rotation (x,y) in pixel, Default is [1024.5,1024.5]
 
     Returns
     -------
@@ -1547,7 +1552,7 @@ def rotate_header(h,angle):
     rad = angle * np.pi/180
     rot = np.asarray([[np.cos(rad),-np.sin(rad),0],[np.sin(rad),np.cos(rad),0],[0,0,1]])
     coords = np.asarray([h['CRPIX1'],h['CRPIX2'],1])
-    center = [1024.5,1024.5] # CRPIX from 1 to 2048, so 1024.5 is the center
+#     center = [1024.5,1024.5] # CRPIX from 1 to 2048, so 1024.5 is the center
     tr = np.asarray([[1,0,center[0]],[0,1,center[1]],[0,0,1]])
     invtr = np.asarray([[1,0,-center[0]],[0,1,-center[1]],[0,0,1]])
 
@@ -1575,6 +1580,8 @@ def translate_header(h,tvec,mode='crpix'):
         header of image to be translated
     tvec : list
         vector to translate image by (in pixels) [x,y]
+    mode : str
+        if 'crpix' (Default) the shift will be applied to CRPIX*, if 'crval' the shift will be applied to CRVAL*
 
     Returns
     -------
@@ -1582,11 +1589,16 @@ def translate_header(h,tvec,mode='crpix'):
         new header
     """
     if mode == 'crval':
-        tr = np.asarray([[1,0,-tvec[1]*ht['CDELT1']],[0,1,-tvec[0]*ht['CDELT2']],[0,0,1]])
-        coords = np.asarray([h['CRVAL1'],h['CRVAL2'],1])
-        new_coords = tr @ coords
-        h['CRVAL1'] = round(new_coords[0],4)
-        h['CRVAL2'] = round(new_coords[1],4)
+        tr = np.asarray([[1,0,-tvec[1]],[0,1,-tvec[0]],[0,0,1]])
+        angle = h['CROTA'] # positive angle = clock-wise rotation of the reference system axes 
+        rad = angle * np.pi/180
+        vec = np.asarray([tvec[1],tvec[0],1])
+        rot = np.asarray([[np.cos(rad),-np.sin(rad),0],[np.sin(rad),np.cos(rad),0],[0,0,1]])
+        shift = rot @ vec
+        shift[0] *= h['CDELT1']
+        shift[1] *= h['CDELT2']
+        h['CRVAL1'] = round(h['CRVAL1']-shift[0],4)
+        h['CRVAL2'] = round(h['CRVAL2']-shift[1],4)
     elif mode == 'crpix':
         tr = np.asarray([[1,0,tvec[1]],[0,1,tvec[0]],[0,0,1]])
         coords = np.asarray([h['CRPIX1'],h['CRPIX2'],1])
@@ -1596,6 +1608,86 @@ def translate_header(h,tvec,mode='crpix'):
     else:
         print('mode not valid\nreturn old header')
     return h
+
+def image_register(ref,im,subpixel=True,deriv=False):
+    """
+    credits: Marco Stangalini (2010, IDL version). Adapted for Python by Daniele Calchetti.
+    """
+    try:
+        import pyfftw.interfaces.numpy_fft as fft
+    except:
+        import numpy.fft as fft
+        
+    def _image_derivative(d):
+        import numpy as np
+        from scipy.signal import convolve
+        kx = np.asarray([[1,0,-1], [1,0,-1], [1,0,-1]])
+        ky = np.asarray([[1,1,1], [0,0,0], [-1,-1,-1]])
+        kx=kx/3.
+        ky=ky/3.
+        SX = convolve(d, kx,mode='same')
+        SY = convolve(d, ky,mode='same')
+#         A=SX+SY
+        # DC change on 12/07/2022
+        A=SX**2+SY**2
+        return A
+
+    def _g2d(X, offset, amplitude, sigma_x, sigma_y, xo, yo, theta):
+        import numpy as np
+        (x, y) = X
+        xo = float(xo)
+        yo = float(yo)
+        a = (np.cos(theta)**2)/(2*sigma_x**2) + (np.sin(theta)**2)/(2*sigma_y**2)
+        b = -(np.sin(2*theta))/(4*sigma_x**2) + (np.sin(2*theta))/(4*sigma_y**2)
+        c = (np.sin(theta)**2)/(2*sigma_x**2) + (np.cos(theta)**2)/(2*sigma_y**2)
+        g = offset + amplitude*np.exp( - (a*((x-xo)**2) + 2*b*(x-xo)*(y-yo)
+                                + c*((y-yo)**2)))
+        return g.ravel()
+
+    def _gauss2dfit(a):
+        import numpy as np
+        from scipy.optimize import curve_fit
+        sz = np.shape(a)
+        X,Y = np.meshgrid(np.arange(sz[1])-sz[1]//2,np.arange(sz[0])-sz[0]//2)
+        try:
+            X = X[~X.mask]; Y = Y[~Y.mask]; a = a[~a.mask]
+        except:
+            pass
+        c = np.unravel_index(a.argmax(),sz)
+        y = a[c[0],:]
+        x = X[c[0],:]
+        stdx = 5 #np.sqrt(abs(sum(y * (x - sum(x*y)/sum(y))**2) / sum(y)))
+        y = a[:,c[1]]
+        x = Y[:,c[1]]
+        stdy = 5 #np.sqrt(abs(sum(y * (x - sum(x*y)/sum(y))**2) / sum(y)))
+        initial_guess = [np.median(a), np.max(a), stdx, stdy, c[1] - sz[1]//2, c[0] - sz[0]//2, 0]
+        popt, pcov = curve_fit(_g2d, (X, Y), a.ravel(), p0=initial_guess)
+        return np.reshape(_g2d((X,Y), *popt), sz), popt
+    
+    def _one_power(array):
+        return array/np.sqrt((np.abs(array)**2).mean())
+
+    if deriv:
+        ref = _image_derivative(ref)
+        im = _image_derivative(im)
+        
+    shifts=np.zeros(2)
+    FT1=fft.fftn(ref - np.mean(ref))
+    FT2=fft.fftn(im - np.mean(im))
+    ss=np.shape(ref)
+    r=np.real(fft.ifftn(_one_power(FT1) * _one_power(FT2.conj())))
+    r = fft.fftshift(r)
+    rmax=np.max(r)
+    ppp = np.unravel_index(np.argmax(r),ss)
+    shifts = [(ss[0]//2-(ppp[0])),(ss[1]//2-(ppp[1]))]
+    if subpixel:
+        g, A = _gauss2dfit(r)
+        ss = np.shape(g)
+        shifts[0] = A[5]
+        shifts[1] = A[4]
+        del g
+    del FT1, FT2
+    return r, shifts
 
 def remap(hrt_map, hmi_map, out_shape = (1024,1024), verbose = False):
     """reproject hmi map onto hrt with hrt pixel size and observer coordinates
@@ -1684,9 +1776,20 @@ def remap(hrt_map, hmi_map, out_shape = (1024,1024), verbose = False):
     
     return hmi_map
 
-def WCS_correction(file_name,jsoc_email,dir_out='./',allDID=False,verbose=False):
+def subregion_selection(ht,start_row,start_col,original_shape,dsmax = 512):
+    intcrpix1 = int(round(ht['CRPIX1']))
+    intcrpix2 = int(round(ht['CRPIX2']))
+    
+    ds = min(dsmax,intcrpix2-start_row,intcrpix1-start_col,original_shape[0]+start_row-intcrpix2,original_shape[1]+start_col-intcrpix1)
+    sly = slice(intcrpix2-ds,intcrpix2+ds)
+    slx = slice(intcrpix1-ds,intcrpix1+ds)
+    
+    return sly, slx
+
+def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpol=False, allDID=False,verbose=False, values_only = False):
     """This function saves new version of the fits file with updated WCS.
-    It works by correlating HRT data on remapped HMI data. This function exports the nearest HMI data from JSOC. [Not downloaded to out_dir]
+    It works by correlating HRT data on remapped HMI data. 
+    This function exports the nearest HMI data from JSOC. [Not downloaded to out_dir]
     Not validated on limb data. 
     Not tested on data with different viewing angle.
     icnt, stokes or ilam files are expected as input.
@@ -1699,8 +1802,16 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',allDID=False,verbose=False)
         email address to be used for JSOC connection
     dir_out: str
         path to the output directory, DEFAULT: './', if None no file will be saved
+    undistortion: bool
+        if True, HRT will be undistorted (DEFAULT: False).
+    logpol: bool
+        if True, log-polar transform applied until agnle smaller than a threshold (DEFAULT: False).
     allDID: bool
         if True, all the fits file with the same DID in the directory of the input file will be saved with the new WCS.
+    verbose: bool
+        if True, plot of the maps will be shown (DEFAULT: False)
+    values_only: bool
+        if True, new fits will not be saved (DEFAULT: False).
 
     Returns
     -------
@@ -1717,14 +1828,16 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',allDID=False,verbose=False)
     warnings.filterwarnings("ignore", category=sunpy.util.SunpyMetadataWarning)
 
     
-    print('This is a preliminary procedure, not fully tested')
-    print('It has been optimized on raw and continuum data')
+    print('This is a preliminary procedure')
+    print('It has been optimized on raw, continuum and blos data')
     print('This script is based on sunpy routines and examples')
     
-    phi, h_phi = fits.getdata(file_name,header=True)
+    hdr_phi = fits.open(file_name)
+    phi = hdr_phi[0].data; h_phi = hdr_phi[0].header
     start_row = int(h_phi['PXBEG2']-1)
     start_col = int(h_phi['PXBEG1']-1)
     _,_,_,cpos = fits_get_sampling(file_name)
+    original_shape = phi.shape
     
     if phi.ndim == 3:
         phi = phi[cpos*4]
@@ -1732,52 +1845,85 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',allDID=False,verbose=False)
         phi = phi[:,:,0,cpos]
     
     if phi.shape[0] == 2048:
-        und_phi = phi # und(phi)
-        # h_phi['CRPIX1'],h_phi['CRPIX2'] = Inv2(1016,982,h_phi['CRPIX1'],h_phi['CRPIX2'],8e-9)
+        if undistortion:
+            und_phi = und(phi)
+            h_phi['CRPIX1'],h_phi['CRPIX2'] = Inv2(1016,982,h_phi['CRPIX1'],h_phi['CRPIX2'],8e-9)
+        else:
+            und_phi = phi
         phi_map = sunpy.map.Map((und_phi,h_phi))
     else:
         phi = np.pad(phi,[(start_row,2048-(start_row+phi.shape[0])),(start_col,2048-(start_row+phi.shape[1]))])
         h_phi['NAXIS1'] = 2048; h_phi['NAXIS2'] = 2048
         h_phi['CRPIX1'] += start_col; h_phi['CRPIX2'] += start_row
-        und_phi = phi # und(phi)
-        # h_phi['CRPIX1'],h_phi['CRPIX2'] = Inv2(1016,982,h_phi['CRPIX1'],h_phi['CRPIX2'],8e-9)
+        if undistortion:
+            und_phi = und(phi)
+            h_phi['CRPIX1'],h_phi['CRPIX2'] = Inv2(1016,982,h_phi['CRPIX1'],h_phi['CRPIX2'],8e-9)
+        else:
+            und_phi = phi
         phi_map = sunpy.map.Map((und_phi,h_phi))
     
     if verbose:
         phi_map.peek()
     
-    client = drms.Client(email=jsoc_email, verbose=True)
-    kwlist = ['T_REC','T_OBS','DATE-OBS','CADENCE','DSUN_OBS']
     ht = phi_map.fits_header
-    # lt = (hmi_map.dsun - phi_map.dsun).to(u.m)/299792458*u.s/u.m
-
-    t_obs = datetime.datetime.fromisoformat(ht['DATE-AVG'])
+    t0 = hdr_phi[10].data['EXP_START_TIME']
+    if t0.size > 24:
+        t0 = t0[int(round(t0.size//24/2,0))::t0.size//24]
+    #             t0 = np.asarray([DT.datetime.fromisoformat(t0[i]) for i in range(len(t0))])
+    t0 = [t0[i] for i in range(len(t0))]
+    if cpos == 5:
+        t0 = t0[20]
+    else:
+        t0 = t0[0]
+        
+    t_obs = datetime.datetime.fromisoformat(t0)
     
     dtai = datetime.timedelta(seconds=37) # datetime.timedelta(seconds=94)
     dcad = datetime.timedelta(seconds=35) # half HMI cadence (23) + margin
     
     dltt = datetime.timedelta(seconds=ht['EAR_TDEL']) # difference in light travel time S/C-Earth
 
-    keys = client.query('hmi.ic_45s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
-                      (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
+    kwlist = ['T_REC','T_OBS','DATE-OBS','CADENCE','DSUN_OBS']
     
-    lt = (np.mean(keys['DSUN_OBS'])*u.m - phi_map.dsun).to(u.m)/c
-    dltt = datetime.timedelta(seconds=lt.value) # difference in light travel time S/C-SDO
-
-    ind = np.argmin([np.abs((datetime.datetime.strptime(t,'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds())
-                     for t in keys['T_OBS']])
-    name_h = 'hmi.ic_45s['+keys['T_REC'][ind]+']{Continuum}'
-
-    if np.abs((datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds()) > 23:
-        print('WARNING: Closer file exists but has not been found.')
-        print(name_h)
-        print('T_OBS:',datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
-        print('DATE-AVG:',t_obs)
-        print('')
-
-    s45 = client.export(name_h,protocol='fits')
-    hmi_map = sunpy.map.Map(s45.urls.url[0])
+    try:
+        client = drms.Client(email=jsoc_email, verbose=True) 
     
+        if ht['BTYPE'] == 'BLOS':
+            keys = client.query('hmi.m_45s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
+                               (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
+        else:
+            keys = client.query('hmi.ic_45s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
+                               (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
+        
+        lt = (np.mean(keys['DSUN_OBS'])*u.m - phi_map.dsun).to(u.m)/c
+        dltt = datetime.timedelta(seconds=lt.value) # difference in light travel time S/C-SDO
+
+        ind = np.argmin([np.abs((datetime.datetime.strptime(t,'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds())
+                         for t in keys['T_OBS']])
+        
+        if ht['BTYPE'] == 'BLOS':
+            name_h = 'hmi.m_45s['+keys['T_REC'][ind]+']{Magnetogram}'
+        else:
+            name_h = 'hmi.ic_45s['+keys['T_REC'][ind]+']{Continuum}'
+
+        if np.abs((datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds()) > 23:
+            print('WARNING: Closer file exists but has not been found.')
+            print(name_h)
+            print('T_OBS:',datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
+            print('DATE-AVG:',t_obs)
+            print('')
+
+        s45 = client.export(name_h,protocol='fits')
+        hmi_map = sunpy.map.Map(s45.urls.url[0],cache=False)
+        cache_dir = "/home/calchetti/.cache/sunpy/"
+        hmi_name = cache_dir + s45.urls.url[0].split("/")[-1]
+        
+        if verbose:
+            hmi_map.peek()
+    except:
+        print("Issue with downloading HMI. The code stops here. Restults obtained so far will be saved")
+        return h_phi['CROTA'], h_phi['CRPIX1'] - start_col, h_phi['CRPIX2'] - start_row, h_phi['CRVAL1'], h_phi['CRVAL2'], t0, False
+        
     if verbose:
         hmi_map.peek()
     
@@ -1791,56 +1937,64 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',allDID=False,verbose=False)
     shift = [1,1]
     i = 0
     angle = 1
+    match = False
     
-    while np.any(np.abs(shift)>5e-2):
-        phi_map = sunpy.map.Map((und_phi,ht))
+    try:
+        while np.any(np.abs(shift)>5e-2):
+            phi_map = sunpy.map.Map((und_phi,ht))
 
-        bl = phi_map.pixel_to_world(slx.start*u.pix, sly.start*u.pix)
-        tr = phi_map.pixel_to_world((slx.stop-1)*u.pix, (sly.stop-1)*u.pix)
-        phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
-                              top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
+            bl = phi_map.pixel_to_world(slx.start*u.pix, sly.start*u.pix)
+            tr = phi_map.pixel_to_world((slx.stop-1)*u.pix, (sly.stop-1)*u.pix)
+            phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
+                                  top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
 
-        hmi_map_remap = remap(phi_map, hmi_map, out_shape = (2048,2048), verbose=False)
+            hmi_map_remap = remap(phi_map, hmi_map, out_shape = (2048,2048), verbose=False)
 
-        top_right = hmi_map_remap.world_to_pixel(tr)
-        bottom_left = hmi_map_remap.world_to_pixel(bl)
-        tr_hmi_map = np.array([top_right.x.value,top_right.y.value])
-        bl_hmi_map = np.array([bottom_left.x.value,bottom_left.y.value])
-        hmi_map_wcs = hmi_map_remap.submap(bl_hmi_map*u.pix,top_right=tr_hmi_map*u.pix)
+            top_right = hmi_map_remap.world_to_pixel(tr)
+            bottom_left = hmi_map_remap.world_to_pixel(bl)
+            tr_hmi_map = np.array([top_right.x.value,top_right.y.value])
+            bl_hmi_map = np.array([bottom_left.x.value,bottom_left.y.value])
+            hmi_map_wcs = hmi_map_remap.submap(bl_hmi_map*u.pix,top_right=tr_hmi_map*u.pix)
 
-        ref = phi_submap.data.copy()
-        temp = hmi_map_wcs.data.copy(); temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
-        s = [1,1]
-        shift = [0,0]
-        it = 0
+            ref = phi_submap.data.copy()
+            temp = hmi_map_wcs.data.copy(); temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
+            s = [1,1]
+            shift = [0,0]
+            it = 0
 
-        if abs(angle>1e-2):
-            r = imreg_dft.similarity(ref.copy(),temp.copy(),numiter=3,constraints=dict(scale=(1,0)))
-            shift = r['tvec']; angle = r['angle']
-            hmi_map_shift = imreg_dft.transform_img(hmi_map_wcs.data,scale=1,angle=angle,tvec=shift)
-            hmi_map_shift = sunpy.map.Map((hmi_map_shift,hmi_map_wcs.fits_header))
-            print('logpol transform shift (x,y):',round(shift[1],2),round(shift[0],2),'angle (deg):',round(angle,3))
+            if abs(angle)>1e-2 and logpol:
+                r = imreg_dft.similarity(ref.copy(),temp.copy(),numiter=3,constraints=dict(scale=(1,0)))
+                shift = r['tvec']; angle = r['angle']
+                hmi_map_shift = imreg_dft.transform_img(hmi_map_wcs.data,scale=1,angle=angle,tvec=shift)
+                hmi_map_shift = sunpy.map.Map((hmi_map_shift,hmi_map_wcs.fits_header))
+                print('logpol transform shift (x,y):',round(shift[1],2),round(shift[0],2),'angle (deg):',round(angle,3))
 
-            ht = translate_header(rotate_header(ht.copy(),-angle),shift)
+                ht = translate_header(rotate_header(ht.copy(),-angle),shift,mode='crval')
 
-        else:
-            while np.any(np.abs(s)>1e-3):
-                sr, sc, _ = SPG_shifts_FFT(np.asarray([ref,temp])); s = [sr[1],sc[1]]
-                shift = [shift[0]+s[0],shift[1]+s[1]]
-                temp = fft_shift(hmi_map_wcs.data.copy(), shift); temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
-                it += 1
-                if it == 10:
-                    break
-            hmi_map_shift = sunpy.map.Map((temp,hmi_map_wcs.fits_header))
+            else:
+                while np.any(np.abs(s)>1e-3):
+                    if it == 0 and ~logpol:
+                        _,s = image_register(ref,temp,True,False)
+                    else:
+                        sr, sc, _ = SPG_shifts_FFT(np.asarray([ref,temp])); s = [sr[1],sc[1]]
+                    shift = [shift[0]+s[0],shift[1]+s[1]]
+                    temp = fft_shift(hmi_map_wcs.data.copy(), shift); temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
+                    it += 1
+                    if it == 10:
+                        break
+                hmi_map_shift = sunpy.map.Map((temp,hmi_map_wcs.fits_header))
 
-            ht = translate_header(ht.copy(),np.asarray(shift))
-            print(it,'iterations shift (x,y):',round(shift[1],2),round(shift[0],2))
+                ht = translate_header(ht.copy(),np.asarray(shift),mode='crval')
+                print(it,'iterations shift (x,y):',round(shift[1],2),round(shift[0],2))
 
-        i+=1
-        if i == 10:
-            print('Maximum iterations reached:',i)
-            break
-            
+            i+=1
+            if i == 10:
+                print('Maximum iterations reached:',i)
+                break
+    except:
+        print("Issue with co-alignment. The code stops here. Restults obtained so far will be saved")
+        return ht['CROTA'], ht['CRPIX1'] - start_col, ht['CRPIX2'] - start_row, ht['CRVAL1'], ht['CRVAL2'], t0, False
+    
     phi_map = sunpy.map.Map((und_phi,ht))
     phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
                                top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
@@ -1861,20 +2015,40 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',allDID=False,verbose=False)
     name = file_name.split('/')[-1]
     new_name = name.split('L2')[0]+'L2.WCS'+name.split('L2')[1]
     
-    if dir_out is not None:
-        if allDID:
-            did = h_phi['PHIDATID']
-            directory = file_name[:-len(name)]
-            file_n = os.listdir(directory)
-            if type(did) != str:
-                did = str(did)
-            did_n = [directory+i for i in file_n if did in i]
-            l2_n = ['stokes','icnt','bmag','binc','bazi','vlos','blos']
-            for n in l2_n:
-                f = [i for i in did_n if n in i][0]
-                name = f.split('/')[-1]
-                new_name = name.split('L2')[0]+'L2.WCS'+name.split('L2')[1]
-                with fits.open(f) as h:
+    if os.path.isfile(hmi_name):
+        os.remove(hmi_name)
+        print(hmi_name.split("/")[-1]+' deleted')
+    
+    if values_only:
+        return ht['CROTA'], ht['CRPIX1'] - start_col, ht['CRPIX2'] - start_row, ht['CRVAL1'], ht['CRVAL2'], t0, match
+    else:
+        if dir_out is not None:
+            if allDID:
+                did = h_phi['PHIDATID']
+                directory = file_name[:-len(name)]
+                file_n = os.listdir(directory)
+                if type(did) != str:
+                    did = str(did)
+                did_n = [directory+i for i in file_n if did in i]
+                l2_n = ['stokes','icnt','bmag','binc','bazi','vlos','blos']
+                for n in l2_n:
+                    f = [i for i in did_n if n in i][0]
+                    name = f.split('/')[-1]
+                    new_name = name.split('L2')[0]+'L2.WCS'+name.split('L2')[1]
+                    with fits.open(f) as h:
+                        h[0].header['CROTA'] = ht['CROTA']
+                        h[0].header['CRPIX1'] = ht['CRPIX1']
+                        h[0].header['CRPIX2'] = ht['CRPIX2']
+                        h[0].header['CRVAL1'] = ht['CRVAL1']
+                        h[0].header['CRVAL2'] = ht['CRVAL2']
+                        h[0].header['PC1_1'] = ht['PC1_1']
+                        h[0].header['PC1_2'] = ht['PC1_2']
+                        h[0].header['PC2_1'] = ht['PC2_1']
+                        h[0].header['PC2_2'] = ht['PC2_2']
+                        h[0].header['HISTORY'] = 'WCS corrected via HRT - HMI cross correlation'
+                        h.writeto(dir_out+new_name, overwrite=True)        
+            else:
+                with fits.open(file_name) as h:
                     h[0].header['CROTA'] = ht['CROTA']
                     h[0].header['CRPIX1'] = ht['CRPIX1']
                     h[0].header['CRPIX2'] = ht['CRPIX2']
@@ -1884,22 +2058,9 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',allDID=False,verbose=False)
                     h[0].header['PC1_2'] = ht['PC1_2']
                     h[0].header['PC2_1'] = ht['PC2_1']
                     h[0].header['PC2_2'] = ht['PC2_2']
-                    h[0].header['HISTORY'] = 'WCS corrected via HRTundistorted - HMI cross correlation (continuum intensity)'
-                    h.writeto(dir_out+new_name, overwrite=True)        
-        else:
-            with fits.open(file_name) as h:
-                h[0].header['CROTA'] = ht['CROTA']
-                h[0].header['CRPIX1'] = ht['CRPIX1']
-                h[0].header['CRPIX2'] = ht['CRPIX2']
-                h[0].header['CRVAL1'] = ht['CRVAL1']
-                h[0].header['CRVAL2'] = ht['CRVAL2']
-                h[0].header['PC1_1'] = ht['PC1_1']
-                h[0].header['PC1_2'] = ht['PC1_2']
-                h[0].header['PC2_1'] = ht['PC2_1']
-                h[0].header['PC2_2'] = ht['PC2_2']
-                h[0].header['HISTORY'] = 'WCS corrected via HRTundistorted - HMI cross correlation '
-                h.writeto(dir_out+new_name, overwrite=True)
-    return ht
+                    h[0].header['HISTORY'] = 'WCS corrected via HRT - HMI cross correlation '
+                    h.writeto(dir_out+new_name, overwrite=True)
+        return ht['CROTA'], ht['CRPIX1'] - start_col, ht['CRPIX2'] - start_row, ht['CRVAL1'], ht['CRVAL2'], t0, match
 ###############################################
 
 def cavity_shifts(cavity_f, wave_axis,rows,cols):
