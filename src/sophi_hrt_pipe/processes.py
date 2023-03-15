@@ -271,6 +271,9 @@ def normalise_flat(flat, ceny, cenx) -> np.ndarray:
     start_time = time.perf_counter()
 
     try:
+        flat[np.isinf(flat)] = 1
+        flat[np.isnan(flat)] = 1
+        flat[flat == 0] = 1
         norm_fac = np.mean(flat[ceny,cenx, :, :], axis = (0,1))[np.newaxis, np.newaxis, ...]  #mean of the central 1k x 1k
         flat /= norm_fac
 
@@ -1248,7 +1251,7 @@ def create_intermediate_hdr(data, hdr_interm, history_str, file_name, **kwargs):
     for arg, value in kwargs.items():
         if arg == 'bunit':
             b_unit = value
-        if arg is 'btype':
+        if arg == 'btype':
             b_type = value
 
     #need separate, as if no kwargs, the top won't show

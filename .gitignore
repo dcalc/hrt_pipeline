@@ -61,4 +61,4 @@ pymilos/build/
 pymilos/build/*
 pymilos/pymilos.egg-info/
 pymilos/pymilos.egg-info/*
-
+pymilos/.nfs*
