@@ -477,13 +477,16 @@ def compare_IMGDIRX(flat,header_imgdirx_exists,imgdirx_flipped,header_fltdirx_ex
             if fltdirx_flipped == 'YES':
                 return flat
             else:
+                print('Flipping the calibration dataset')
                 return flat[:,:,::-1]
         else:
+            print('Flipping the calibration dataset')
             return flat[:,:,::-1]
     elif (header_imgdirx_exists and imgdirx_flipped == 'NO') or not header_imgdirx_exists: 
         #if science is not flipped, or keyword doesnt exist, then assumed not flipped
         if header_fltdirx_exists:
             if fltdirx_flipped == 'YES':
+                print('Flipping the calibration dataset')
                 return flat[:,:,::-1] #flip flat back to match science
             else:
                 return flat
@@ -1240,7 +1243,7 @@ def gaus(x,a,x0,sigma):
 
 
 def gaussian_fit(a,show=True):
-    """Gaussian fit for data 'a' from np.histogram
+    """Gaussian fit for data 'a' from np.histogram or plt.hist
 
     Parameters
     ----------
@@ -1289,7 +1292,7 @@ def iter_noise(temp, p = [1,0,1e-1], eps = 1e-6):
     hi : array
         output from np.histogram
     """
-    p_old = [1,0,10]; count = 0
+    p_old = [1,0,100]; count = 0
     it = 0
     while np.abs(p[2] - p_old[2])>eps:
         p_old = p; count += 1
@@ -1340,13 +1343,14 @@ def blos_noise(blos_file, iter=True, fs = None):
     lbl = f'{p[1]:.2e} $\pm$ {p[2]:.2e} G'
     
     if iter:
+        ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
         try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,1.],eps=1e-4)
-            ax[1].plot(xx,gaus(xx,*p_iter),'r--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
-            ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
+            p_iter, hi_iter = iter_noise(values,[1.,0.,10.],eps=1e-4)
+            ax[1].plot(xx,gaus(xx,*p_iter),'g--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
+            # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
         except:
             print("Iterative Gauss Fit failed")
-            ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
+            p_iter = p
 
     else:
         ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
@@ -1442,10 +1446,11 @@ def stokes_noise(stokes_file, iter=True):
     lbl = f'{p[1]:.2e} $\pm$ {p[2]:.2e}'
     
     if iter:
+        ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
         try:
             p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6)
-            ax[1].plot(xx,gaus(xx,*p_iter),'r--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
-            ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
+            ax[1].plot(xx,gaus(xx,*p_iter),'g--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
+            # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
         except:
             print("Iterative Gauss Fit failed")
             ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)

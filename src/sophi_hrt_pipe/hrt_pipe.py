@@ -183,7 +183,11 @@ def phihrt_pipe(input_json_file):
             ghost_c = input_dict['ghost_c']  #20211116
         else:
             ghost_c = False
-        cavity_f = input_dict['cavity_f']
+        cavity_c = input_dict['cavity_c']
+        if cavity_c:
+            cavity_f = input_dict['cavity_f']
+        else:
+            cavity_f = None
         rte = input_dict['rte']
         out_intermediate = input_dict['out_intermediate']  #20211116
         pymilos_opt = input_dict['pymilos']
