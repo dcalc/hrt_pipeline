@@ -191,6 +191,9 @@ def phihrt_pipe(input_json_file):
         rte = input_dict['rte']
         out_intermediate = input_dict['out_intermediate']  #20211116
         pymilos_opt = input_dict['pymilos']
+        # pixel by pixel shift not implemented yet in pymilos
+        if cavity_c:
+            pymilos_opt = False
         
         #output dir/filenames
         out_dir = input_dict['out_dir']
