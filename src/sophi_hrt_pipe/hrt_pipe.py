@@ -134,7 +134,8 @@ def phihrt_pipe(input_json_file):
         data_f = input_dict['data_f']
         flat_f = input_dict['flat_f']
         dark_f = input_dict['dark_f']
-
+        prefilter_f = input_dict['prefilter_f']
+        
         #input/output type + scaling
         L1_input = input_dict['L1_input']
         if L1_input:
@@ -149,6 +150,7 @@ def phihrt_pipe(input_json_file):
         #reduction
         dark_c = input_dict['dark_c']
         flat_c = input_dict['flat_c']
+        prefilter_c = input_dict['prefilter_c']
         if 'TemperatureCorrection' not in input_dict: #if FG != 61 deg - will correct wavelengths
             TemperatureCorrection = False
         else:
@@ -159,7 +161,6 @@ def phihrt_pipe(input_json_file):
             sigma = input_dict['sigma']
             clean_mode = input_dict['clean_mode']
         flat_states = input_dict['flat_states']
-        prefilter_f = input_dict['prefilter_f']
         if 'fs_c' in input_dict:
             fs_c = input_dict['fs_c']
         else:
@@ -434,7 +435,7 @@ def phihrt_pipe(input_json_file):
     # PREFILTER CORRECTION  
     #-----------------
 
-    if prefilter_f is not None:
+    if prefilter_c:
         print(" ")
         printc('-->>>>>>> Prefilter Correction',color=bcolors.OKGREEN)
         prefilter_c = True
