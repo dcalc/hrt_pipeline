@@ -346,7 +346,7 @@ def demod_hrt(data, pmp_temp, verbose = True) -> np.ndarray:
         demod_data = np.linalg.inv(mod_matrix)
         
     else:
-        printc("Demodulation Matrix for PMP TEMP of {pmp_temp} deg is not available", color = bcolors.FAIL)
+        printc(f"Demodulation Matrix for PMP TEMP of {pmp_temp} deg is not available", color = bcolors.FAIL)
     if verbose:
         printc(f'Using a constant demodulation matrix for a PMP TEMP of {pmp_temp} deg, rotated by {HRT_MOD_ROTATION_ANGLE} deg',color = bcolors.OKGREEN)
     
@@ -1306,10 +1306,17 @@ def write_out_intermediate(data_int, hdr_interm, history_str, scan, root_scan_na
         hdu_list.writeto(out_dir + root_scan_name + f'_{suffix}.fits', overwrite=True)
 
         
-def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, level = 'CAL1', version = 'V01', out_dir = None):   
+def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, TemperatureCorrection = False, level = 'CAL2', version = 'V01', out_dir = None):   
     # from sophi_hrt_pipe.processes import apply_field_stop, hot_pixel_mask
     PD, h = get_data(data_f,True,True,True)
     
+    start_row = int(h['PXBEG2']-1)
+    start_col = int(h['PXBEG1']-1)
+    data_size = PD.shape[1:]
+    
+    rows = slice(start_row,start_row + data_size[0])
+    cols = slice(start_col,start_col + data_size[1])
+
     if 'IMGDIRX' in h:
         header_PDdirx_exists = True
         PDdirx_flipped = str(h['IMGDIRX'])
@@ -1319,37 +1326,18 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, leve
         
     PD = compare_IMGDIRX(PD,True,'YES',header_PDdirx_exists,PDdirx_flipped)
 
-    # Voltage is 850, same as the continuum in the observations on the same day
-    # PMP voltages are 2093 2036 as for the first polarization state in each cycle
-
-    F, hF = get_data(flat_f,True, True, True)
-    if 'IMGDIRX' in hF:
-        header_flatdirx_exists = True
-        flatdirx_flipped = str(hF['IMGDIRX'])
-    else:
-        header_flatdirx_exists = False
-        flatdirx_flipped = 'NO'
+    if dark_f is not None:
+        D, hD = get_data(dark_f,True,True,True)
+        if 'IMGDIRX' in hD:
+            header_drkdirx_exists = True
+            drkdirx_flipped = str(hD['IMGDIRX'])
+        else:
+            header_drkdirx_exists = False
+            drkdirx_flipped = 'NO'
+            
+        D = compare_IMGDIRX(D[np.newaxis],True,'YES',header_drkdirx_exists,drkdirx_flipped)[0]
     
-    F = compare_IMGDIRX(F,True,'YES',header_flatdirx_exists,flatdirx_flipped)
-    F = stokes_reshape(F)
-    wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True)
-    
-    D, hD = get_data(dark_f,True,False,True)
-    if 'IMGDIRX' in hD:
-        header_drkdirx_exists = True
-        drkdirx_flipped = str(hD['IMGDIRX'])
-    else:
-        header_drkdirx_exists = False
-        drkdirx_flipped = 'NO'
-        
-    D = compare_IMGDIRX(D[np.newaxis],True,'YES',header_drkdirx_exists,drkdirx_flipped)[0]
-    
-    if norm_f:
-        F = F/F[slice(1024-256,1024+256),slice(1024-256,1024+256)].mean(axis=(0,1))[np.newaxis,np.newaxis]
-    else:
-        F = F/F[slice(0,2048),slice(0,2048)].mean(axis=(0,1))[np.newaxis,np.newaxis]
-    
-    PDd = (PD - D[np.newaxis])# / F[np.newaxis,:,:,0,5]
+        PD = (PD - D[np.newaxis,rows,cols])# / F[np.newaxis,:,:,0,5]
 
     if prefilter_f is not None:
         prefilter, _ = load_fits(prefilter_f)
@@ -1360,17 +1348,41 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, leve
         ref_wavelength = 6173.341 # this shouldn't change
         Tfg = h['FGH_TSP1']
         Volt = fits.open(data_f)[3].data['PHI_FG_voltage'][0]
-        wl = Volt * tunning_constant + ref_wavelength + temperature_constant_new*(Tfg-61)
-        
-        fakePD = np.zeros((2048,2048,4,6,1)); fakePD[:,:,0,0,0] = PDd[0].copy(); fakePD[:,:,0,1,0] = PDd[1].copy()
+        if TemperatureCorrection:
+            wl = Volt * tunning_constant + ref_wavelength + temperature_constant_new*(Tfg-61)
+        else:
+            wl = Volt * tunning_constant + ref_wavelength
+        fakePD = np.zeros((data_size[0],data_size[1],4,6,1)); fakePD[:,:,0,:,0] = np.moveaxis(PD.copy(),0,-1);
         # voltagesData_arr = [np.asarray([Volt,Volt,Volt,Volt,Volt,Volt])]
         wlData_arr = [np.asarray([wl,wl,wl,wl,wl,wl])]
-        fakePD = prefilter_correction(fakePD,wlData_arr,prefilter,None,True)
-        PDd = np.squeeze(np.moveaxis(fakePD[:,:,0,:2,0],2,0))
-        F = prefilter_correction(F[...,np.newaxis],[wave_flat],prefilter,None,True)[...,0]
+        fakePD = prefilter_correction(fakePD,wlData_arr,prefilter[rows,cols],None,True)
+        PD = np.squeeze(np.moveaxis(fakePD[:,:,0,:2,0],2,0))
+        
     
-    
-    PDdf = PDd / F[np.newaxis,:,:,0,cpos_f]
+    # Voltage is 850, same as the continuum in the observations on the same day
+    # PMP voltages are 2093 2036 as for the first polarization state in each cycle
+    if flat_f is not None:
+        F, hF = get_data(flat_f,True, True, True)
+        if 'IMGDIRX' in hF:
+            header_flatdirx_exists = True
+            flatdirx_flipped = str(hF['IMGDIRX'])
+        else:
+            header_flatdirx_exists = False
+            flatdirx_flipped = 'NO'
+        
+        F = compare_IMGDIRX(F,True,'YES',header_flatdirx_exists,flatdirx_flipped)
+        F = stokes_reshape(F)
+        wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True,TemperatureCorrection=TemperatureCorrection)
+
+        if norm_f:
+            F = F/F[slice(1024-256,1024+256),slice(1024-256,1024+256)].mean(axis=(0,1))[np.newaxis,np.newaxis]
+        else:
+            F = F/F[slice(0,2048),slice(0,2048)].mean(axis=(0,1))[np.newaxis,np.newaxis]
+
+        if prefilter_f is not None:
+            F = prefilter_correction(F[...,np.newaxis],[wave_flat],prefilter,None,True)[...,0]
+            
+        PD = PD / F[np.newaxis,rows,cols,0,cpos_f]
     
     field_stop_loc = os.path.realpath(__file__)
     field_stop_loc = field_stop_loc.split('src/')[0] + 'field_stop/'
@@ -1382,25 +1394,28 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, leve
             field_stop = field_stop[:,::-1] #also need to flip the flat data after dark correction
 
 
-    PDdf *= field_stop[np.newaxis]
+    PD *= field_stop[np.newaxis,rows,cols]
 
-    PDdf = np.moveaxis(hot_pixel_mask(np.moveaxis(PDdf,0,-1),slice(0,2048),slice(0,2048)),-1,0)
+    PD = np.moveaxis(hot_pixel_mask(np.moveaxis(PD,0,-1),rows,cols),-1,0)
     
     if out_dir is not None:
-        temp = data_f.split('/')[-1].split('L1')
+        if 'CAL1' in data_f:
+            temp = data_f.split('/')[-1].split('CAL1')
+        else:
+            temp = data_f.split('/')[-1].split('L1')
         temp[1] = temp[1].split('V')
         temp[1][1][13:]
         name = temp[0]+level+temp[1][0]+version+temp[1][1][13:]
 
         with fits.open(data_f) as hdr:
-            hdr[0].data = PDdf
+            hdr[0].data = PD
             hdr[0].header['CAL_DARK'] = dark_f
             hdr[0].header['CAL_FLAT'] = flat_f
             if prefilter_f is not None:
                 hdr[0].header['CAL_PRE'] = prefilter_f
             hdr.writeto(out_dir+name, overwrite=True)
     
-    return PDdf
+    return PD
 
 def solarRotation(hdr):
     # vrot from hathaway et al., 2011, values in deg/day

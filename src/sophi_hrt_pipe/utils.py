@@ -1345,7 +1345,7 @@ def blos_noise(blos_file, iter=True, fs = None):
     if iter:
         ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
         try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,10.],eps=1e-4)
+            p_iter, hi_iter = iter_noise(values,[1.,0.,10.],eps=1e-4); p_iter[0] = pp[0]
             ax[1].plot(xx,gaus(xx,*p_iter),'g--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
             # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
         except:
@@ -1448,7 +1448,7 @@ def stokes_noise(stokes_file, iter=True):
     if iter:
         ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
         try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6)
+            p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = pp[0]
             ax[1].plot(xx,gaus(xx,*p_iter),'g--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
             # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
         except:
@@ -2328,3 +2328,380 @@ def phi_disambig(bazi,bamb,method=2):
     disbazi[disambig%2 != 0] += 180
     
     return disbazi
+
+def dataset_colorbar(ax,im,location="top",label=None):
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes(location, size="5%", pad=0.05)
+    if location == 'top' or location == 'bottom':
+        orientation = 'horizontal'
+    else:
+        orientation = 'vertical'
+    
+    cb = plt.colorbar(im, orientation=orientation, cax=cax)
+#     cax.set_title(r'km$^2$/s$^2$/Hz',fontsize=9); #cax.yaxis.set_label_position("right")
+    if label is not None:
+        cax.set_title(label,fontsize=9,x=-.1,y=-1); #cax.yaxis.set_label_position("right")
+    if location == 'top' or location == 'bottom':
+        cax.xaxis.set_ticks_position(location)
+    else:
+        cax.yaxis.set_ticks_position(location)
+    
+    cax.tick_params(labelsize=8)
+
+    return cax
+
+def show_image_array(arr, hdr, grayscales, row_labels=None, 
+                     column_labels=None, titles=None,
+                     fig_title=None, ax_order=None):
+    """Show array images of shape (rows, columns, X, Y).
+
+    Parameters
+    ----------
+    
+    """
+
+    import itertools
+
+    panel_sz = 3.3
+    rows, columns = arr.shape[0:2]
+    _, _, _, sly, slx = limb_side_finder(arr[0,0],hdr,False)
+    # fig_width, fig_height = plt.gcf().get_size_inches()
+    # print(fig_width, fig_height)    
+
+    fig, axs = plt.subplots(
+        rows, columns,
+        sharex=True, sharey=True,
+        subplot_kw=dict(aspect=1),
+        figsize=(columns * panel_sz, rows * panel_sz),
+        layout='constrained',
+        # gridspec_kw={'hspace': 0, 'wspace': 0},
+        # **kwargs
+    )
+
+    # Sort plots
+    if ax_order is not None:
+        axs = axs.flatten()
+        axs = [axs[i] for i in ax_order]
+
+    axs = np.reshape(axs, (rows, columns))
+
+    # plt.subplots_adjust(top=0.92)
+
+    for i, j in itertools.product(range(rows), range(columns)):
+        im = arr[i, j, :, :]
+
+        mean = im[sly,slx].mean()
+
+        ax = axs[i, j]
+        im = axs[i, j].imshow(im, cmap='gray', vmin=mean-grayscales[i], vmax=mean+grayscales[i])
+
+        # Print color scale range
+        ax.text(0.05, 0.94, f'{mean:.4f} $\pm$ {grayscales[i]:.3f}', transform=ax.transAxes, color='white')
+
+    # Set row labels
+    if row_labels is not None:
+        for row_label, ax in zip(row_labels, axs[:, 0]):
+            ax.set_ylabel(row_label)
+
+    # Set column labels
+    if column_labels is not None:
+        for column_label, ax in zip(column_labels, axs[0, :]):
+            ax.set_title(column_label)
+
+    # Set panel titles
+    if titles is not None:
+        for title, ax in zip(titles, axs.flatten()):
+            ax.set_title(title, fontsize=12)
+
+    if fig_title is not None:
+        fig.suptitle(fig_title, fontsize=14)
+
+    return fig
+
+def plot_l2_pdf(path,did,version=None):
+    """
+    Generate standard plots for pipeline results
+    """
+
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+    import glob
+    # import os
+    # import re
+    # from argparse import ArgumentParser
+    # import numpy as np
+    
+    # import sys
+
+    import matplotlib as mpl
+    mpl.rc_file_defaults()
+    mpl.rcParams['image.origin'] = 'lower'
+    # plt.rcParams['figure.dpi'] = 300
+    plt.rcParams['xtick.direction'] = 'in'
+    plt.rcParams['ytick.direction'] = 'in'
+    import sunpy.visualization.colormaps
+    import cmasher as cmr
+
+    file_n = os.listdir(path)
+    if type(did) != str:
+        did = str(did).rjust(10,'0')
+    if version is None:
+        version = '*'
+
+    # pdf_name = re.search('.*/(.*)$', args.path).groups()[0]
+    
+    # # -----------------------------------------------------------------------------
+    # # Loading data
+    # # -----------------------------------------------------------------------------
+
+    dat = {}
+    keys = ['icnt', 'vlos', 'blos', 'binc', 'bmag', 'bazi', 'chi2']
+    for key in keys:
+        datfile = glob.glob(os.path.join(path, f'solo_L2_phi-hrt-{key}_*_{version}_{did}.fits.gz'))[0]
+        dat[key], h = load_fits(datfile)
+    _, _, _, sly, slx = limb_side_finder(dat['icnt'], h, False)
+    
+
+    datfile = glob.glob(os.path.join(path, f'solo_L2_phi-hrt-stokes_*_{version}_{did}.fits.gz'))[0]
+    stk, h = load_fits(datfile)
+    wavelengths,_,_,cpos = fits_get_sampling(datfile)
+
+    if version == '*':
+        version = 'V'+h['VERSION']
+    save_file = os.path.join(path, f'{did}_{version}.pdf')
+    p = PdfPages(save_file)
+
+    # # -----------------------------------------------------------------------------
+    # # Plot inversion results
+    # # -----------------------------------------------------------------------------
+
+    # Plot parameters
+    panel_sz = 4
+    dpi = 300
+    rows = 2
+    columns = 3
+
+    fig, axs = plt.subplots(
+        rows, columns,
+        sharey=True,
+        subplot_kw={'aspect': 1},
+        figsize=(columns * panel_sz + 2, rows * panel_sz), dpi=dpi,
+        layout='constrained')
+
+    # Continuum intensity
+    ax = axs[0, 0]
+    im = ax.imshow(dat['icnt'], cmap='gist_heat', vmin=0.2, vmax=1.2)
+    dataset_colorbar(ax,im,"right")
+    ax.set_title('Continuum intensity')
+
+    # vLOS
+    ax = axs[0, 1]
+    shape = dat['vlos'].shape
+    avg = dat['vlos'][int(shape[0]//4):-int(shape[0]//4),int(shape[1]//4):-int(shape[1]//4)].mean()
+    im = ax.imshow(dat['vlos'], cmap=cmr.fusion.reversed(), vmin=-2+avg, vmax=2+avg)
+    dataset_colorbar(ax,im,"right", label='km/s')
+    ax.set_title('LoS velocity')
+
+    # BLOS
+    ax = axs[0, 2]
+    im = ax.imshow(dat['blos'], cmap='hmimag', vmin=-1500, vmax=1500)
+    dataset_colorbar(ax,im,"right", label='G')
+    ax.set_title('LoS magnetic field')
+
+    # B inclination
+    ax = axs[1, 0]
+    im = ax.imshow(dat['binc'], cmap=cmr.fusion, vmin=0, vmax=180)
+    dataset_colorbar(ax,im,"right", label='°')
+    ax.set_title('Magn. field inclination')
+
+    # B
+    ax = axs[1, 1]
+    im = ax.imshow(dat['bmag'], cmap='gnuplot_r', vmin=0, vmax=1000)
+    dataset_colorbar(ax,im,"right", label='G')
+    ax.set_title('Magn. field strength')
+
+    # B azimuth
+    ax = axs[1, 2]
+    im = ax.imshow(dat['bazi'], cmap='hsv', vmin=0, vmax=180)
+    dataset_colorbar(ax,im,"right", label='°')
+    ax.set_title('Magn. field azimuth')
+
+    # Figure title
+    timestp = h['FILENAME'].split('_')[-3]
+    fig.suptitle(os.path.join(path, f'solo_L2_phi-hrt-*_{timestp}_{version}_{did}.fits'), fontsize=12)
+
+    fig.savefig(p, format='pdf')
+    plt.close(fig)
+
+    panel_sz = 4
+    dpi = 300
+    rows = 2
+    columns = 3
+
+    fig, axs = plt.subplots(
+        rows, columns,
+        subplot_kw={'aspect': 1},
+        figsize=(columns * panel_sz + 2, rows * panel_sz), dpi=dpi,
+        layout='constrained')
+
+    # Chisq
+    ax = axs[0,0]
+    im = ax.imshow(dat['chi2'], cmap='turbo', vmin=0, vmax=50)
+    dataset_colorbar(ax,im,"right")
+    ax.set_title('$\chi^2$')
+
+
+    # Blos Noise
+    values = dat['blos'][sly,slx]
+
+    ax = axs[0,1]
+    hi = ax.hist(values.flatten(), bins=np.linspace(-2e2,2e2,200),)
+    tmp = [0,0]
+    tmp[0] = hi[0].astype('float64')
+    tmp[1] = hi[1].astype('float64')
+
+    #guassian fit + label
+    pp = gaussian_fit(tmp, show = False)    
+    xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
+    lbl = f'{pp[1]:.2e} $\pm$ {pp[2]:.2e} G'
+
+
+    ax.plot(xx,gaus(xx,*pp),'r--', label=lbl)
+    try:
+        p_iter, hi_iter = iter_noise(values,[1.,0.,10.],eps=1e-4); p_iter[0] = pp[0]
+        ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
+        # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
+    except:
+        print("Iterative Gauss Fit failed")
+    ax.set_aspect('auto')
+    ax.legend()
+    ax.set_title(f"LoS magnetic field NSR")
+
+    # Blos Transverse
+    values = (dat['bmag']*np.sin(dat['binc']*np.pi/180))[sly,slx]
+
+    ax = axs[0,2]
+    hi = ax.hist(values.flatten(), bins=np.linspace(0,10e2,200))
+    tmp = [0,0]
+    tmp[0] = hi[0].astype('float64')
+    tmp[1] = hi[1].astype('float64')
+
+    #guassian fit + label
+    pp = gaussian_fit(tmp, show = False)    
+    xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
+    lbl = f'{pp[1]:.2e} $\pm$ {pp[2]:.2e} G'
+
+
+    ax.plot(xx,gaus(xx,*pp),'r--', label=lbl)
+    try:
+        p_iter, hi_iter = iter_noise(values,[1.,0.,1000.],eps=1e-4); p_iter[0] = pp[0]
+        ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
+        # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
+    except:
+        print("Iterative Gauss Fit failed")
+    ax.set_aspect('auto')
+    ax.legend()
+    ax.set_title(f"Transverse magnetic field NSR")
+
+    # Stokes Q Noise
+    values = stk[cpos,1,sly,slx]
+
+    ax = axs[1,0]
+    hi = ax.hist(values.flatten(), bins=np.linspace(-1e-2,1e-2,200),)
+    tmp = [0,0]
+    tmp[0] = hi[0].astype('float64')
+    tmp[1] = hi[1].astype('float64')
+
+    #guassian fit + label
+    pp = gaussian_fit(tmp, show = False)    
+    xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
+    lbl = f'{pp[1]:.2e} $\pm$ {pp[2]:.2e}'
+
+
+    ax.plot(xx,gaus(xx,*pp),'r--', label=lbl)
+    try:
+        p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = pp[0]
+        ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
+        # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
+    except:
+        print("Iterative Gauss Fit failed")
+    ax.set_aspect('auto')
+    ax.legend()
+    ax.set_title(f"Stokes Q NSR")
+
+    # Stokes U Noise
+    values = stk[cpos,2,sly,slx]
+
+    ax = axs[1,1]
+    hi = ax.hist(values.flatten(), bins=np.linspace(-1e-2,1e-2,200),)
+    tmp = [0,0]
+    tmp[0] = hi[0].astype('float64')
+    tmp[1] = hi[1].astype('float64')
+
+    #guassian fit + label
+    pp = gaussian_fit(tmp, show = False)    
+    xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
+    lbl = f'{pp[1]:.2e} $\pm$ {pp[2]:.2e}'
+
+
+    ax.plot(xx,gaus(xx,*pp),'r--', label=lbl)
+    try:
+        p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = pp[0]
+        ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
+        # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
+    except:
+        print("Iterative Gauss Fit failed")
+    ax.set_aspect('auto')
+    ax.legend()
+    ax.set_title(f"Stokes U NSR")
+
+    # Stokes V Noise
+    values = stk[cpos,3,sly,slx]
+
+    ax = axs[1,2]
+    hi = ax.hist(values.flatten(), bins=np.linspace(-1e-2,1e-2,200),)
+    tmp = [0,0]
+    tmp[0] = hi[0].astype('float64')
+    tmp[1] = hi[1].astype('float64')
+
+    #guassian fit + label
+    pp = gaussian_fit(tmp, show = False)    
+    xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
+    lbl = f'{pp[1]:.2e} $\pm$ {pp[2]:.2e}'
+
+
+    ax.plot(xx,gaus(xx,*pp),'r--', label=lbl)
+    try:
+        p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = pp[0]
+        ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
+        # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
+    except:
+        print("Iterative Gauss Fit failed")
+    ax.set_aspect('auto')
+    ax.legend()
+    ax.set_title(f"Stokes V NSR")
+
+    fig.savefig(p, format='pdf')
+    plt.close(fig)
+
+    # # -----------------------------------------------------------------------------
+    # # Plot Stokes images
+    # # -----------------------------------------------------------------------------
+
+    dat = np.transpose(stk, (1, 0, 2, 3))  # re-arrange Stokes and wavelength axes 
+
+    grayscales = [1] + [0.01] * 3  # I, Q, U, V
+    row_labels = ['I', 'Q', 'U', 'V']
+    column_labels = ['{:.3f} nm'.format(wave) for wave in wavelengths]
+    title = os.path.basename(datfile) 
+
+    fig = show_image_array(
+        dat, h, grayscales, row_labels=row_labels,
+        column_labels=column_labels, fig_title=title)
+
+    fig.savefig(p, format='pdf')
+    plt.close(fig)
+    p.close()
+
