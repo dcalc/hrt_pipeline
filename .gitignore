@@ -45,6 +45,7 @@ input_jsons/sep_2021_L1_south_noflat.json
 .ipynb_checkpoints/
 .pat
 src/sophi_hrt_pipe/rt_pipe_PF.py
+src/sophi_hrt_pipe/PSF_*.py
 test.ipynb
 src/__pycache__/
 src/sophi_hrt_pipe.egg-info/
@@ -54,3 +55,10 @@ cmilos/milos
 .vscode/settings.json
 .vscode
 .Trash*
+pymilos/pymilos.c
+pymilos/pymilos.cpython*
+pymilos/build/
+pymilos/build/*
+pymilos/pymilos.egg-info/
+pymilos/pymilos.egg-info/*
+pymilos/.nfs*

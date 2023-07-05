@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.fftpack import fftshift, ifftshift, fft2, ifft2
 from scipy.optimize import leastsq
-
+from scipy import signal as sig
 
 def Zernike_polar(coefficients, r, u):
    #Z= np.insert(np.array([0,0,0]),3,coefficients)  
@@ -127,7 +127,7 @@ def PSF(mask,abbe):
 def OTF(psf):
     otf = ifftshift(psf)
     otf = fft2(otf)
-    otf = otf/float(otf[0,0])
+    otf = otf/np.real(otf[0,0])
     #otf = otf/otf.max() # or otf_max = otf[size/2,size/2] if max is shifted to center
    
     return otf
@@ -145,27 +145,30 @@ def noise_mask_high(size,cut_off):
 
 def apo2d(masi,perc):
    s = masi.shape
-   edge = 100./perc
+   # edge = 100./perc
    mean = np.mean(masi)
    masi = masi-mean
-   xmask = np.ones(s[1])
-   ymask = np.ones(s[0])
-   smooth_x = int(s[1]/edge)
-   smooth_y = int(s[0]/edge)
+   # xmask = np.ones(s[1])
+   # ymask = np.ones(s[0])
+   # smooth_x = int(s[1]/edge)
+   # smooth_y = int(s[0]/edge)
 
-   for i in range(0,smooth_x):
-      xmask[i] = (1.-np.cos(np.pi*float(i)/float(smooth_x)))/2.
-      ymask[i] = (1.-np.cos(np.pi*float(i)/float(smooth_y)))/2.
+   # for i in range(0,smooth_x):
+   #    xmask[i] = (1.-np.cos(np.pi*float(i)/float(smooth_x)))/2.
+   #    ymask[i] = (1.-np.cos(np.pi*float(i)/float(smooth_y)))/2.
     
-   xmask[s[1] - smooth_x:s[1]] = (xmask[0:smooth_x])[::-1]
-   ymask[s[0] - smooth_y:s[0]] = (ymask[0:smooth_y])[::-1]
+   # xmask[s[1] - smooth_x:s[1]] = (xmask[0:smooth_x])[::-1]
+   # ymask[s[0] - smooth_y:s[0]] = (ymask[0:smooth_y])[::-1]
 
-   #mask_x = np.outer(xmask,xmask)
-   #mask_y = np.outer(ymask,ymask)
-   for i in range(0,s[1]):
-      masi[:,i] = masi[:,i]*xmask[i]
-   for i in range(0,s[0]):
-      masi[i,:] = masi[i,:]*ymask[i]
+   mask = sig.tukey(s[0], alpha=perc*2/100)[np.newaxis]*sig.tukey(s[1], alpha=perc*2/100)[:,np.newaxis]
+   masi *= mask
+
+   # #mask_x = np.outer(xmask,xmask)
+   # #mask_y = np.outer(ymask,ymask)
+   # for i in range(0,s[1]):
+   #    masi[:,i] = masi[:,i]*xmask[i]
+   # for i in range(0,s[0]):
+   #    masi[i,:] = masi[i,:]*ymask[i]
    masi = masi+mean
    return masi
 
@@ -191,28 +194,45 @@ def Wienerfilter_th(img,t0,reg,cut_off,ap,size,t0_th):
 
 
 def combine_all_PD():
-   coefficients = np.zeros(38)
-   coefficients[:23] = np.array([ 1.94428601,  0.36762832,  0.61874354, -0.24504269, -0.25386458,
-         0.18834626, -1.26666803,  1.15594472,  0.02213881,  0.14563544,
-         -0.29933957,  0.01619363, -0.15828751, -0.04142371,  0.07867531,
-         -0.17719113,  0.04658804,  0.1191974 ,  0.04424823,  0.05749467,
-         0.03511377, -0.0163282 , -0.12770855])
-      
-   coef_stp = np.zeros(38)
-   coef_stp[:10] = np.array([ 0.32725408,  -0.01148539,  0.46752924,  0.00413511, 0.01964055,
-                              0.13448377,  -0.59294403,  0.38801043,  0.03050344,  -0.07010066])
+    coef_mercury = np.zeros(38)
+    coef_mercury = np.array([ 0.18832408, -0.05898845,  0.37148277,  0.11978066,  0.04899826,
+      0.01091053, -0.71103133,  0.30863236,  0.17790991,  0.01844966])
+    coef_stp = np.zeros(38)
 
-   coef_phi5 = np.zeros(38)
-   coef_phi5[:10] = np.array([-0.16508714,  -0.10259014,  0.35210216,  0.22433325, 0.14908674,
-                              0.06424761,  -0.3348285 ,  0.22482951, -0.02742681,  -0.08395544])
-   coef_rsw = coefficients
+    coef_stp[:10] = np.array([ 0.32725408,  -0.01148539,  0.46752924,  0.00413511, 0.01964055,         0.13448377,  -0.59294403,  0.38801043,  0.03050344,  -0.07010066])
 
-   Z = np.zeros((10,3))
-   for i in range(10):
-      Z[i] = np.array([coef_phi5[i], coef_stp[i],coef_rsw[i]])
-   Z = Z/(2*np.pi)
+    coef_phi5 = np.zeros(38)
+    coef_phi5[:10] = np.array([-0.16508714,  -0.10259014,  0.35210216,  0.22433325, 0.14908674,        0.06424761,  -0.3348285 ,  0.22482951, -0.02742681,  -0.08395544])
+    coef_dec14 = np.zeros(38)
 
-   return Z
+    coef_dec14[:10] = np.array([  0.02573863 ,-0.18333147 , 0.11750382 , 0.09734724,  0.08016765,  0.08639256,
+    -0.53653446,  0.28481244, -0.07403384, -0.08887265])
+
+    coef_pole = np.zeros(38)
+
+    coef_pole[:10] = np.array([ 0.13373513 ,-0.17625596,  0.04235497,  0.05157151,  0.13109485 , 0.13481264,
+    -0.52994354,  0.28815754, -0.06476646 ,-0.041813  ])
+
+    coef_p4 = np.zeros(38)
+    coef_p4[:10] =np.array([ 1.12442328,  0.01208591,  0.20809855,  0.03129121,  0.06509192,
+        0.30374011, -1.50006527,  0.63940768, -0.09987474,  0.03119266])
+
+    coef_march_2023 = np.zeros(38)
+    coef_march_2023[:23] = np.array([ 2.11169352e+00, -1.80421435e-02,  7.76484745e-01,  1.32452559e-02,
+        5.25011832e-02,  2.95164375e-01, -1.87781733e+00,  9.75140679e-01,
+        1.07475017e-01, -3.12696976e-02,  3.03663426e-02,  8.25885183e-02,
+       -1.92541296e-03, -1.94365743e-02, -4.26271468e-02, -2.97586590e-02,
+       -7.11505884e-02,  9.81252863e-02,  3.71581542e-03,  2.31641944e-02,
+       -1.21817336e-02, -3.46693462e-02,  1.09760478e-01])
+
+
+    Z = np.zeros((10,7))
+
+    for i in range(10):
+      Z[i] = np.array([coef_mercury[i],coef_dec14[i],coef_pole[i],coef_phi5[i], coef_stp[i],coef_p4[i],coef_march_2023[i]])#,coef_rsw[i]])
+#list = np.array([defocus,astigma_45,astigma_0,coma_y,coma_x,trefoil_y,trefoil_x,SA,astigma_0_2,astigma_34_2])
+    Z = Z/(2*np.pi)
+    return Z
 
 
 def func(params, x):
@@ -237,19 +257,21 @@ def solution(X,Y,zernike,d_in):
 
 
 def build_zernikes(Z,d_in):
-   n = np.array([0.82,0.52,0.334])
+   n = np.array([0.95,0.889,0.873,0.823,0.52,0.454,0.39])#,0.334])
+
    coefficients = np.zeros(38)
    defocus = solution(n,Z[0],'defocus',d_in)
-# Output the final result
    Y_trefoil = solution(n,Z[5],'Y-Trefoil',d_in)
 
    X_trefoil =  solution(n,Z[6],'X-Trefoil',d_in)
    SA =solution(n,Z[7],'Spherical aberration',d_in)
-   coefficients[:23] = np.array([defocus,  0.36762832,  0.61874354, -0.24504269, -0.25386458,
-         Y_trefoil, X_trefoil,  SA,  0.02213881,  0.14563544,
-         -0.29933957,  0.01619363, -0.15828751, -0.04142371,  0.07867531,
-         -0.17719113,  0.04658804,  0.1191974 ,  0.04424823,  0.05749467,
-         0.03511377, -0.0163282 , -0.12770855])
+   coefficients[:23] =np.array([ defocus, -1.80421435e-02,  7.76484745e-01,  1.32452559e-02,
+        5.25011832e-02,  Y_trefoil, X_trefoil,  SA,
+        1.07475017e-01, -3.12696976e-02,  3.03663426e-02,  8.25885183e-02,
+       -1.92541296e-03, -1.94365743e-02, -4.26271468e-02, -2.97586590e-02,
+       -7.11505884e-02,  9.81252863e-02,  3.71581542e-03,  2.31641944e-02,
+       -1.21817336e-02, -3.46693462e-02,  1.09760478e-01])
+  
    return coefficients
 
 
@@ -281,31 +303,65 @@ def make_wf_th(size):
    t0 = OTF(psf_foc)
    return t0
 
-def restore_stokes_cube(stokes_data, header, demod = True):
-   #   stokes_data = pyfits.getdata(file_path)
+def restore_stokes_cube(stokes_data, header, orbit = 'perihelion',aberr_cor=False):
+
    size = stokes_data[:,:,0,0].shape[0]
-   # header = pyfits.getheader(file_path)
+   if size < 2048:
+      edge_mask = np.zeros((size,size))
+      edge_mask[3:-3,3:-3] = 1
+   else:
+      edge_mask = np.ones((size,size))
+   pad_width = int(size*10/(100-10*2))
+   res_stokes = np.zeros((size+pad_width*2,size+pad_width*2,4,6))
+   pad_size = size+pad_width*2
    d_in = header['DSUN_AU']
-   Z = combine_all_PD()
-   coefficients = build_zernikes(Z,d_in)
-   #coefficients = np.zeros(38)
-   #coefficients[:10] = np.array([ 0.32725408,  -0.01148539,  0.46752924,  0.00413511, 0.01964055, 0.13448377,  -0.59294403,  0.38801043,  0.03050344,  -0.07010066])
+
+   if orbit=='perihelion':
+    Z = combine_all_PD()
+    coefficients = build_zernikes(Z,d_in)
+    t0 = make_wf(pad_size,coefficients)
+    if aberr_cor:
+     t0_th = make_wf_th(pad_size)
+     for i in range(4):
+       for j in range(6):
+         im0 = stokes_data[:,:,i,j] * edge_mask
+         im0 = np.pad(im0, pad_width=((pad_width, pad_width), (pad_width, pad_width)), mode='symmetric')
+
+         res_stokes[:,:,i,j] = Wienerfilter_th(im0,t0,0.01,0.5,10,pad_size,t0_th)
+
+    else:
+     for i in range(4):
+       for j in range(6):
+         im0 = stokes_data[:,:,i,j] * edge_mask
+         im0 = np.pad(im0, pad_width=((pad_width, pad_width), (pad_width, pad_width)), mode='symmetric')
+
+         res_stokes[:,:,i,j] = Wienerfilter(im0,t0,0.01,0.5,10,pad_size)
+
+
                          
-   res_stokes = np.zeros((size,size,4,6))
-   t0 = make_wf(size,coefficients)
-   t0_th = make_wf_th(size)
-   #added by DC for running this script on modulated or demodulated data
-   #if demod:
-    #  nlev = 0.01
-   #else:
-    #  nlev = 0.001
 
-   for i in range(4):
-      for j in range(6):
-         im0 = stokes_data[:,:,i,j]
-         if i==1 or i==2 or i==3:
+   elif orbit == '0.5':
+       coefficients = np.zeros(38)
+       coefficients[:10] = np.array([ 0.32725408,  -0.01148539,  0.46752924,  0.00413511, 0.01964055, 0.13448377,  -0.59294403,  0.38801043,  0.03050344,  -0.07010066])                     
+       t0 = make_wf(pad_size,coefficients)
+        
+       if aberr_cor:
+        t0_th = make_wf_th(pad_size)
+        for i in range(4):
+         for j in range(6):
+          im0 = stokes_data[:,:,i,j] * edge_mask
+          im0 = np.pad(im0, pad_width=((pad_width, pad_width), (pad_width, pad_width)), mode='symmetric')
 
-            res_stokes[:,:,i,j] = Wienerfilter_th(im0,t0,0.01,0.5,10,size,t0_th)
-         elif i==0:
-            res_stokes[:,:,i,j] = Wienerfilter_th(im0,t0,0.01,0.5,10,size,t0_th)  
+          res_stokes[:,:,i,j] = Wienerfilter_th(im0,t0,0.01,0.5,10,pad_size,t0_th)
+
+       else:
+        for i in range(4):
+          for j in range(6):
+           im0 = stokes_data[:,:,i,j] * edge_mask
+           im0 = np.pad(im0, pad_width=((pad_width, pad_width), (pad_width, pad_width)), mode='symmetric')
+
+           res_stokes[:,:,i,j] = Wienerfilter(im0,t0,0.01,0.5,10,pad_size)
+   print('-->>>>>>> PSF deconvolution is done with Z='+str(coefficients)+'\nAberration correction is set to '+str(aberr_cor))
+
+   res_stokes = res_stokes[pad_width:-pad_width,pad_width:-pad_width] * edge_mask[:,:,np.newaxis,np.newaxis]
    return res_stokes
