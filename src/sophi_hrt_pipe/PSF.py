@@ -276,7 +276,9 @@ def build_zernikes(Z,d_in):
 
 
 def make_wf(size,coefficients):
-
+   """
+   Giving the size of the array and the Zernike coefficients, this function computes the telescope PSF
+   """
    D = 140
    lam = 617.3*10**(-6)
    pix = 0.5
@@ -290,6 +292,9 @@ def make_wf(size,coefficients):
    return t0
 
 def make_wf_th(size):
+   """
+   Giving the size of the array, this function computes the theoretical telescope PSF
+   """
    coe = np.zeros(38)
    D = 140
    lam = 617.3*10**(-6)
@@ -361,7 +366,7 @@ def restore_stokes_cube(stokes_data, header, orbit = 'perihelion',aberr_cor=Fals
            im0 = np.pad(im0, pad_width=((pad_width, pad_width), (pad_width, pad_width)), mode='symmetric')
 
            res_stokes[:,:,i,j] = Wienerfilter(im0,t0,0.01,0.5,10,pad_size)
-   print('-->>>>>>> PSF deconvolution is done with Z='+str(coefficients)+'\nAberration correction is set to '+str(aberr_cor))
+   print('-->>>>>>> PSF deconvolution is done with Z =',coefficients,'\nAberration correction is set to '+str(aberr_cor))
 
    res_stokes = res_stokes[pad_width:-pad_width,pad_width:-pad_width] * edge_mask[:,:,np.newaxis,np.newaxis]
    return res_stokes

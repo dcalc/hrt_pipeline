@@ -11,8 +11,8 @@
 //
 // CMILOS v0.91 (July - 2021) - Pre-Adapted to python by D. Orozco Suarez
 // CMILOS v0.92 (Oct - 2021) - Cleaner version D. Orozco Suarez
-// CMILOS v0.93 (Oct - 2021) - added void 
-// CMILOS v0.94 (March - 2022) - modified CI for different continuum (DC) 
+// CMILOS v0.93 (Oct - 2021) - added void
+// CMILOS v0.94 (March - 2022) - modified CI for different continuum (DC)
 // CMILOS v0.9 (2015)
 // RTE INVERSION C code for SOPHI (based on the IDL code MILOS by D. Orozco)
 // juanp (IAA-CSIC)
@@ -28,7 +28,7 @@
 //   [FWHM DELTA NPOINTS] use convolution with a gaussian? if the tree parameteres are defined yes, else no. Units in A. NPOINTS has to be odd.
 //   profiles_file.txt name of input profiles file
 //   output.txt name of output file
-// 
+//
 //
 
 #include <time.h>
@@ -169,7 +169,7 @@ void call_milos(const int *options, size_t size, const double *waveaxis, double 
 	double dat[7]={CUANTIC_NWL,CUANTIC_SLOI,CUANTIC_LLOI,CUANTIC_JLOI,CUANTIC_SUPI,CUANTIC_LUPI,CUANTIC_JUPI};
 
 	int Max_iter;
-    // added 20 Oct 2022 (now initial model is an input from pymilos)
+	// added 20 Oct 2022 (now initial model is an input from pymilos)
     PRECISION INITIAL_MODEL_B = initial_model[0];
     PRECISION INITIAL_MODEL_GM = initial_model[1];
     PRECISION INITIAL_MODEL_AZI = initial_model[2];
@@ -264,7 +264,7 @@ void call_milos(const int *options, size_t size, const double *waveaxis, double 
 			nsub=0;
 			neje=0;
 			np = contador*NLAMBDA*4;
-			while (nsub<NLAMBDA){ 
+			while (nsub<NLAMBDA){
 				spectro[nsub] = inputdata[nsub + np];
 				spectro[nsub+NLAMBDA] = inputdata[nsub + NLAMBDA + np];
 				spectro[nsub+NLAMBDA*2] = inputdata[nsub + NLAMBDA*2 + np];
@@ -276,7 +276,7 @@ void call_milos(const int *options, size_t size, const double *waveaxis, double 
 				nsub++;
 				neje++;
 			}
-			
+
 			//Initial Model
 			initModel.eta0 = INITIAL_MODEL_ETHA0;
 			initModel.B = INITIAL_MODEL_B; //200 700
@@ -451,8 +451,7 @@ int main(int argc,char **argv){
 	double slight;
 	double toplim;
 	int miter;
-	// PRECISION weight[4]={1.,10.,10.,4.};
-	PRECISION weight[4]={1.,4.,5.4,4.1}; // 20 Oct 2022
+	PRECISION weight[4]={1.,10.,10.,4.};
 	int nweight;
 
 	clock_t t_ini, t_fin;
@@ -478,19 +477,19 @@ int main(int argc,char **argv){
 
 	char *nombre,*input_iter;
 	int Max_iter;
-    
+
 	// Since initial model was removed from defines.h, we need to add it here for CMILOS
 	// 20 Oct 2022
-	PRECISION INITIAL_MODEL_B = 400;
+    PRECISION INITIAL_MODEL_B = 400;
     PRECISION INITIAL_MODEL_GM = 30;
     PRECISION INITIAL_MODEL_AZI = 120;
-    PRECISION INITIAL_MODEL_ETHA0 = 1;
-    PRECISION INITIAL_MODEL_LAMBDADOPP = 0.05;  //en A
-    PRECISION INITIAL_MODEL_AA = 1.5;
+    PRECISION INITIAL_MODEL_ETHA0 = 3;
+    PRECISION INITIAL_MODEL_LAMBDADOPP = 0.0205;  //en A
+    PRECISION INITIAL_MODEL_AA = 1.0;
     PRECISION INITIAL_MODEL_VLOS = 0.01; // Km/s
-    PRECISION INITIAL_MODEL_S0 = 0.22;
+    PRECISION INITIAL_MODEL_S0 = 0.15;
     PRECISION INITIAL_MODEL_S1 = 0.85;
-    
+
 	//milos NLAMBDA MAX_ITER CLASSICAL_ESTIMATES RFS [FWHM DELTA NPOINTS] perfil.txt
 
 	if(argc!=6 && argc != 7 && argc !=9){
@@ -658,9 +657,9 @@ int main(int argc,char **argv){
 		do{
 			neje=0;
 			nsub=0;
-			 while (neje<NLAMBDA && (rfscanf=fscanf(fichero,"%lf %lf %lf %lf %lf",&lin,&iin,&qin,&uin,&vin))!= EOF){ 
+			 while (neje<NLAMBDA && (rfscanf=fscanf(fichero,"%lf %lf %lf %lf %lf",&lin,&iin,&qin,&uin,&vin))!= EOF){
 
-				lambda[nsub]=lin;	 
+				lambda[nsub]=lin;
 				spectro[nsub]=iin;
 				spectro[nsub+NLAMBDA]=qin;
 				spectro[nsub+NLAMBDA*2]=uin;
@@ -1034,7 +1033,7 @@ int CalculaNfree(PRECISION *spectro,int nspectro){
 */
 void estimacionesClasicas(PRECISION lambda_0,double *lambda,int nlambda,PRECISION *spectro,Init_Model *initModel){
 
-	// Modified by Daniele Calchetti (DC) calchetti@mps.mpg.de in March 2022 
+	// Modified by Daniele Calchetti (DC) calchetti@mps.mpg.de in March 2022
 
 	PRECISION x,y,aux,LM_lambda_plus,LM_lambda_minus,Blos,beta_B,Ic,Vlos;
 	PRECISION *spectroI,*spectroQ,*spectroU,*spectroV;
@@ -1315,7 +1314,7 @@ int mil_svd(PRECISION *h,PRECISION *beta,PRECISION *delta){
 			h1[j]=h[j];
 		}
 		svdcmp(h1,NTERMS,NTERMS,w,v);
- 
+
  		static PRECISION vaux[NTERMS*NTERMS],waux[NTERMS];
 
 		for(j=0;j<NTERMS*NTERMS;j++){
@@ -1345,7 +1344,7 @@ int mil_svd(PRECISION *h,PRECISION *beta,PRECISION *delta){
 // 		float wmax,wmin,**un,*wn,**vn,*x; //*b,,*x; int i,j;
 
 // 		for(i=1;i<=NTERMS;i++)
-// 			for(j=1;j<=NTERMS;j++) 
+// 			for(j=1;j<=NTERMS;j++)
 // 				un[i][j]=h[i*(j+1)];
 // 		svdcmp(un,NTERMS,NTERMS,wn,vn);
 // 		wmax=0.0;
@@ -1700,4 +1699,3 @@ void response_functions_convolution(){
 	}
 
 }
-

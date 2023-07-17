@@ -37,6 +37,6 @@ fin:
 	@echo --
 	@echo All done.
 
-clear:
-	rm *.o
-	rm milos
+clean:
+	rm -f *.o
+	rm -f milos
