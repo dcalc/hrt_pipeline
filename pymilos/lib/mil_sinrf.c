@@ -2,9 +2,6 @@
 #include "defines.h"
 #include <string.h>
 
-//pro me_der,param,wl,lmb,spectra,d_spectra,triplete=triplete,ah=ah,slight=slight,$
-  //         filter=filter
-
 int funcionComponent_sinrf(PRECISION *u,PRECISION ulos,PRECISION shift,int numl,PRECISION *fi_x,
 		PRECISION *shi_x,PRECISION A);
 
@@ -16,7 +13,7 @@ char * concatenasin(char *a, int n,char*b);
 PRECISION mean(PRECISION *dat, int numl);
 /*
 	E00	int eta0; // 0
-	MF	int B;    
+	MF	int B;
 	VL	PRECISION vlos;
 	LD	PRECISION dopp;
 	A	PRECISION aa;
@@ -25,15 +22,12 @@ PRECISION mean(PRECISION *dat, int numl);
 	B0	PRECISION S0;
 	B1	PRECISION S1;
 	MC	PRECISION mac; //9
-		PRECISION alfa;		
+		PRECISION alfa;
 */
 
 
 extern PRECISION * gp1,*gp2,*dt,*dti,*gp3,*gp4,*gp5,*gp6,*etai_2;
-//extern PRECISION gp4_gp2_rhoq[NLAMBDA],gp5_gp2_rhou[NLAMBDA],gp6_gp2_rhov[NLAMBDA];
-
 extern PRECISION *gp4_gp2_rhoq,*gp5_gp2_rhou,*gp6_gp2_rhov;
-
 extern PRECISION CC,CC_2,sin_gm,azi_2,sinis,cosis,cosis_2,cosi,sina,cosa,sinda,cosda,sindi,cosdi,sinis_cosa,sinis_sina;
 extern PRECISION *fi_p,*fi_b,*fi_r,*shi_p,*shi_b,*shi_r;
 extern PRECISION *etain,*etaqn,*etaun,*etavn,*rhoqn,*rhoun,*rhovn;
@@ -57,35 +51,30 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
 	PRECISION E00,MF,VL,LD,A,GM,AZI,B0,B1,MC,ALF;
 
 	int il,i,j;
-	PRECISION E0;	
+	PRECISION E0;
 	PRECISION ulos,*g;
-	//static PRECISION u[NLAMBDA];
 	PRECISION *u;
 
 	u = calloc(nlambda,sizeof(PRECISION));
-	
-    PRECISION *dgp1,*dgp2,*dgp3,*dgp4,*dgp5,*dgp6,*d_dt;
-    int edge,numln,ishift,par;
-    PRECISION *axis,*g1,*g2;
-	_Complex double *fftg,*ffts,*fftaux,*fftaux2,*fftd;    
+
 	PRECISION  parcial;
 
 	offset= 0;//10.0;
 
-	E00=initModel->eta0; 
-	MF=initModel->B;    
+	E00=initModel->eta0;
+	MF=initModel->B;
 	VL=(initModel->vlos) - offset;
 	LD=initModel->dopp;
 	A=initModel->aa;
-	GM=initModel->gm; 
+	GM=initModel->gm;
 	AZI=initModel->az;
 	B0=initModel->S0;
 	B1=-((initModel->S1)*ah);
 	MC=initModel->mac;
-	ALF=initModel->alfa;		
-	
+	ALF=initModel->alfa;
+
 	nterms=NTERMS; // realmente el tama�o necesario es 11 ??
-	numl=nlambda;   	
+	numl=nlambda;
 
 	lineas=(int)wlines[0];
 
@@ -97,7 +86,7 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
 	etav=calloc(numl,sizeof(PRECISION));
 	rhoq=calloc(numl,sizeof(PRECISION));
 	rhou=calloc(numl,sizeof(PRECISION));
-	rhov=calloc(numl,sizeof(PRECISION));	
+	rhov=calloc(numl,sizeof(PRECISION));
 */
 
 	for(j=0;j<numl;j++){
@@ -111,7 +100,7 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
 	}
 
 	//Definicion de ctes.
-	//a radianes	
+	//a radianes
 
 	AZI=AZI*CC;
 	GM=GM*CC;
@@ -131,7 +120,7 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
 	sinis_cosa=sinis*cosa;
 	sinis_sina=sinis*sina;
 
-//    u=calloc(nlambda,sizeof(PRECISION));	
+//    u=calloc(nlambda,sizeof(PRECISION));
     for(il=0;il<lineas;il++) {
 		//reserva de memoria para vectores auxiliares
 
@@ -160,7 +149,7 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
 	    ulos=(VL*wlines[il+1])/(VLIGHT*LD);
 
 
-	    //doppler velocity	    
+	    //doppler velocity
 	    for(i=0;i<nlambda;i++){
 	    	u[i]=((lambda[i]-wlines[il+1])/LD)-ulos;
 	    }
@@ -200,29 +189,29 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
 			parcial=(((wlines[il+1]*wlines[il+1]))/LD)*(CTE4_6_13);
 
 			// printf("parcial %.8e\n",parcial);
-			
-			//caso multiplete						
+
+			//caso multiplete
 			for(i=0;i<cuantic[il].N_SIG;i++){
-				nubB[i]=parcial*cuantic[il].NUB[i]; // Spliting	
+				nubB[i]=parcial*cuantic[il].NUB[i]; // Spliting
 				// printf("nub %.8e\n",nubB[i]);
 			}
 
 			for(i=0;i<cuantic[il].N_PI;i++){
-				nupB[i]=parcial*cuantic[il].NUP[i]; // Spliting			    
-			}						
+				nupB[i]=parcial*cuantic[il].NUP[i]; // Spliting
+			}
 
 			for(i=0;i<cuantic[il].N_SIG;i++){
-//				nurB[i]=parcial*cuantic[il].NUR[i]; // Spliting							
+//				nurB[i]=parcial*cuantic[il].NUR[i]; // Spliting
 				nurB[i]=-nubB[(int)cuantic[il].N_SIG-(i+1)]; // Spliting
-				// printf("nur %.8e\n",nurB[i]);				
-			}						
-//			Asignar_Puntero_Calculos_Compartidos(3,nubB,nupB,nurB);	
+				// printf("nur %.8e\n",nurB[i]);
+			}
+//			Asignar_Puntero_Calculos_Compartidos(3,nubB,nupB,nurB);
 
 			uuGlobal=0;
 			FGlobal=0;
 			HGlobal=0;
 
-			//central component					    					
+			//central component
 			funcionComponentFor_sinrf(u,ulos,cuantic[il].N_PI,numl,cuantic[il].WEP,nupB,fi_p,shi_p,A,MF);
 
 			//blue component
@@ -245,7 +234,7 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
 			PRECISION shift;
 
 			shift=((MF*wlines[il+1]*wlines[il+1])/LD)*(CTE4_6_13*cuantic[il].GEFF);
-			//central component			
+			//central component
 			funcionComponent_sinrf(u,ulos,0,numl,fi_p,shi_p,A);
 			//blue component
 			funcionComponent_sinrf(u,ulos,shift,numl,fi_b,shi_b,A);
@@ -253,7 +242,7 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
 			funcionComponent_sinrf(u,ulos,-shift,numl,fi_r,shi_r,A);
 		}
 
-		//dispersion profiles				
+		//dispersion profiles
 		PRECISION E0_2;
 		E0_2=E0/2.0;
 
@@ -263,8 +252,8 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
 			parcial3[i]=(E0_2)*(shi_p[i]-(shi_b[i]+shi_r[i])/2);
 		}
 
-//		Asignar_Puntero_Calculos_Compartidos(3,parcial1,parcial2,parcial3);	
-		
+//		Asignar_Puntero_Calculos_Compartidos(3,parcial1,parcial2,parcial3);
+
 
 		PRECISION cosi_E0_2;
 		cosi_E0_2=E0_2*cosi;
@@ -291,18 +280,18 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
 			rhou[i]=rhou[i]+rhoun[i];
 			rhov[i]=rhov[i]+rhovn[i];
 		}
-		
+
 		// for(i=0;i<numl;i++){
 			// printf("etain %.8e\n",etain[i]);
-			
+
 
 		// for(i=0;i<numl;i++){
 			// printf("etaqn %.8e\n",etaqn[i]);
-			
-			
+
+
 	//}
-	
-	
+
+
 
 //		Asignar_Puntero_Calculos_Compartidos(7,etain,etaqn,etaun,etavn,rhoqn,rhoun,rhovn);
 
@@ -312,17 +301,17 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
 
     //liberamos memoria
 	free(u);
-            
+
     //Los parametros de Stokes estan normalizados a la intensidad en el continuo (no) ??
-    
-	
+
+
 	// for(i=0;i<numl;i++){
 			// printf("etai %.8e\n",etai[i]);
 	// }
 
-	for(i=0;i<numl;i++){    	
+	for(i=0;i<numl;i++){
 		etai_2[i]=etai[i]*etai[i];
-    } 
+    }
 
     for(i=0;i<numl;i++){
 		PRECISION auxq,auxu,auxv;
@@ -343,16 +332,16 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
     }
     for(i=0;i<numl;i++){
     	gp4[i]=etai_2[i]*etaq[i]+etai[i]*(etav[i]*rhou[i]-etau[i]*rhov[i]);
-    }    
+    }
     for(i=0;i<numl;i++){
     	gp5[i]=etai_2[i]*etau[i]+etai[i]*(etaq[i]*rhov[i]-etav[i]*rhoq[i]);
-    }    
+    }
     for(i=0;i<numl;i++){
     	gp6[i]=(etai_2[i])*etav[i]+etai[i]*(etau[i]*rhoq[i]-etaq[i]*rhou[i]);
-    }       
-   
+    }
+
 	//static PRECISION dtiaux[nlambda];
-	
+
 	PRECISION *dtiaux;
 	dtiaux = calloc(nlambda,sizeof(PRECISION));
 
@@ -379,7 +368,7 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
     }
 
 	free(dtiaux);
-	
+
 //	Asignar_Puntero_Calculos_Compartidos(9,etai_2,gp1,gp2,gp3,gp4,gp5,gp6,dt,dti);
 
  /*   free(etai);
@@ -398,23 +387,23 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
     free(gp5);
     free(gp6);
     free(dt);
-    free(dti);        
+    free(dti);
 */
 
-   //MACROTURBULENCIA            
+   //MACROTURBULENCIA
 /*    edge=(numl%2)+1;
     numln=numl-edge+1;
 
-   
+
     axis=calloc(numln,sizeof(double));
-    
+
 
     for(i=0;i<numln;i++){
     	axis[i]=lambda[i];
     }
 
-//    g=calloc(numln,sizeof(double));    
-    
+//    g=calloc(numln,sizeof(double));
+
 	char *buf;
 
     if(MC > 0.0001){
@@ -430,13 +419,13 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
     	for(il=0;il<4;il++){
     		if(fabs(mean(spectra+numl*il,numl)) > 1.e-25	){
     			ffts=fft_d(spectra+numl*il,numln,FFT_FORWARD);
-    			
+
 
     			for(i=0;i<numln;i++){
     				fftaux[i]=ffts[i]*fftg[i];
     			}
 
-		
+
     			fftaux2=fft_c(fftaux,numln,FFT_BACKWARD);
 
     			//shift: -numln/2
@@ -455,13 +444,13 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
 
 
     }//end if(MC > 0.0001)
-    	 
+
     if(filter=1){
     	//falta
     }
-    
+
     //if(slight)
-        
+
 	//liberar memoria	 ??
 
 	free(axis);
@@ -472,7 +461,7 @@ int mil_sinrf(Cuantic *cuantic,Init_Model *initModel,double * wlines,int nwlines
 
 
 /*
- * 
+ *
  */
 
 int funcionComponentFor_sinrf(PRECISION *u,PRECISION ulos,int n_pi,int numl,double *wex,PRECISION *nuxB,PRECISION *fi_x,
@@ -520,7 +509,7 @@ int funcionComponentFor_sinrf(PRECISION *u,PRECISION ulos,int n_pi,int numl,doub
 		for(j=0;j<numl;j++)
 			printf("%.16e\n",F[j]);
 		*/
-			
+
 		for(j=0;j<numl;j++){
 			fi_x[j]=fi_x[j]+wex[i]*H[j];
 		}
@@ -531,7 +520,7 @@ int funcionComponentFor_sinrf(PRECISION *u,PRECISION ulos,int n_pi,int numl,doub
 
 //		Asignar_Puntero_Calculos_Compartidos(2,H,F);
 
-	}//end for 
+	}//end for
 	uuGlobal=uuGlobal+n_pi;
 	HGlobal=HGlobal+n_pi;
 	FGlobal=FGlobal+n_pi;
@@ -546,27 +535,27 @@ int funcionComponentFor_sinrf(PRECISION *u,PRECISION ulos,int n_pi,int numl,doub
 	free(H);
 	free(F);*/
 
-	return 1;	
+	return 1;
 }
 
 /*
- * 
+ *
  */
 int funcionComponent_sinrf(PRECISION *u,PRECISION ulos,PRECISION shift,int numl,PRECISION *fi_x,
 		PRECISION *shi_x,PRECISION A){
-	
+
 	PRECISION *H,*F,*uu;
 	int j;
-					
+
 	uu=calloc(numl,sizeof(PRECISION));
 	H=calloc(numl,sizeof(PRECISION));
 	F=calloc(numl,sizeof(PRECISION));
-	
+
 
 	for(j=0;j<numl;j++){
 		uu[j]=u[j]-ulos+shift;
-	}	
-	
+	}
+
 	fvoigt(A,uu,numl,H,F);
 
 	for(j=0;j<numl;j++){
@@ -584,7 +573,7 @@ int funcionComponent_sinrf(PRECISION *u,PRECISION ulos,PRECISION shift,int numl,
 
 
 	return 1;
-	
+
 }
 
 

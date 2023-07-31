@@ -17,7 +17,8 @@
 //---------------------------------------------------------
 // USER CONFIGURATION
 
-#define CENTRAL_WL 6173.335400
+// define CENTRAL_WL 6173.335400
+#define CENTRAL_WL 6173.341000 // changed on Sep 27 2022 to chcl zero reference wavelength used for commanding FM
 
 
 //##############################################
@@ -30,7 +31,7 @@
 
 //#############################################
 
-//INITIAL MODEL 
+//INITIAL MODEL
 // #define INITIAL_MODEL_B 1200
 // #define INITIAL_MODEL_GM 170
 // #define INITIAL_MODEL_AZI 20
@@ -63,7 +64,7 @@
 #define CUANTIC_JUPI 0
 
 
-#define NOISE_SIGMA 0.004 
+#define NOISE_SIGMA 0.001 //changed nov 16 becouse noise is less
 
 #define CLASSICAL_ESTIMATES_SAMPLE_REF 4 //Muestra referencia para cambio de cuadrante de azimuth. Depende del numero de muestras y posicion Continuo
 
@@ -84,20 +85,20 @@
 // DONT'T MODIFY ANYTHING BELOW OF THIS LINE
 
 #define PI 	3.14159265358979323846264338327950288419716939937510
- 		 	
+
 #define ILAMBDA 10
-#define TOPLIM 0.000000000001
+#define TOPLIM 1e-24
 #define SLIGHT 0
 #define NOISE 0.001
 
 #define RR  0.5641895836
 
-#define VLIGHT 2.99792458e+5 //;light speed (km/s); 
+#define VLIGHT 2.99792458e+5 //;light speed (km/s);
 
 #define CTE4_6_13 4.6686411e-13
 #define AH 1.0 //angulo heliocentrico
 
-#define FFT_FORWARD -1 
+#define FFT_FORWARD -1
 #define FFT_BACKWARD +1
 
 #define NPARMS 4 //(IQUV)
@@ -109,7 +110,7 @@
 //INIT_MODEL=[eta0,magnet,vlos,landadopp,aa,gamma,azi,B1,B2,macro,alfa]
 struct INIT_MODEL{
 	double eta0; // 0
-	double B;//magnetic field    
+	double B;//magnetic field
 	double vlos;
 	double dopp;
 	double aa;
@@ -118,11 +119,11 @@ struct INIT_MODEL{
 	double S0;
 	double S1;
 	double mac; //9
-	double alfa;		
+	double alfa;
 };
 
-struct CUANTIC{  
-	
+struct CUANTIC{
+
 	double N_PI;
 	double N_SIG;
 	double *NUB;//tam n_sig
@@ -134,8 +135,8 @@ struct CUANTIC{
 	double GL;
 	double GU;
 	double GEFF;
-	double FO;	
-	
+	double FO;
+
 };
 
 typedef struct INIT_MODEL Init_Model;
@@ -176,8 +177,9 @@ int GuardaC(char * nombre,_Complex double *v,int nv,int a);
 
 int fvoigt(PRECISION damp,PRECISION *vv,int nvv,PRECISION *h, PRECISION *f);
 
-void direct_convolution(PRECISION * x, int nx,PRECISION * h, int nh,PRECISION delta);
-PRECISION * vgauss(PRECISION fwhm,int nmuestras_G,PRECISION delta);
-
+// void direct_convolution(PRECISION * x, int nx,PRECISION * h, int nh,PRECISION delta);
+// PRECISION * vgauss(PRECISION fwhm,int nmuestras_G,PRECISION delta);
+void gaussian_psf(PRECISION fwhm,int n_samples,PRECISION delta, PRECISION * res);
+void convolution(PRECISION * input, PRECISION * kernel, int input_size, int kernel_size, PRECISION * output);
 
 #endif /*DEFINES_H_*/

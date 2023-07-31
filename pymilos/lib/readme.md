@@ -1,7 +1,7 @@
 # C- MILOS#
 
 # CMILOS v0.9 (2015) #
-## RTE INVERSION C code for SOPHI (based on the ILD code MILOS by D. Orozco) ##
+## RTE INVERSION C code for SOPHI (based on the IDL code MILOS by D. Orozco) ##
 ## juanp (IAA-CSIC) ##
 
 #How to use:#

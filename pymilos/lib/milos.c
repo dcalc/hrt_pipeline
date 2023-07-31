@@ -9,11 +9,14 @@
 //   (_______/           |/     \|\_______/(_______/(_______)\_______)
 //
 //
+// CMILOS v0.90(2015)
 // CMILOS v0.91 (July - 2021) - Pre-Adapted to python by D. Orozco Suarez
 // CMILOS v0.92 (Oct - 2021) - Cleaner version D. Orozco Suarez
-// CMILOS v0.93 (Oct - 2021) - added void 
-// CMILOS v0.94 (March - 2022) - modified CI for different continuum (DC) 
-// CMILOS v0.9 (2015)
+// CMILOS v0.93 (Oct - 2021) - added void
+// CMILOS v0.94 (March - 2022) - modified CI for different continuum (DC)
+// CMILOS v0.95 (May - 2023) - Added cavity in pmilos (DOS)
+// CMILOS v0.96 (May - 2023) - Added synthesis in pmilos (DOS)
+// CMILOS v0.97 (June - 2023) - PSF changes and much cleaning (DOS)
 // RTE INVERSION C code for SOPHI (based on the IDL code MILOS by D. Orozco)
 // juanp (IAA-CSIC)
 //
@@ -28,7 +31,7 @@
 //   [FWHM DELTA NPOINTS] use convolution with a gaussian? if the tree parameteres are defined yes, else no. Units in A. NPOINTS has to be odd.
 //   profiles_file.txt name of input profiles file
 //   output.txt name of output file
-// 
+//
 //
 
 #include <time.h>
@@ -78,7 +81,7 @@ void reformarVector(PRECISION **spectro,int neje);
 void spectral_synthesis_convolution();
 void response_functions_convolution();
 
-void estimacionesClasicas(PRECISION lambda_0,double *lambda,int nlambda,PRECISION *spectro,Init_Model *initModel);
+void estimacionesClasicas(PRECISION lambda_0,double *lambda,int nlambda, PRECISION *spectro,Init_Model *initModel);
 
 Cuantic* cuantic;   // Variable global, está hecho así, de momento,para parecerse al original
 char * concatena(char *a, int n,char*b);
@@ -104,36 +107,32 @@ PRECISION **uuGlobalInicial;
 PRECISION **HGlobalInicial;
 PRECISION **FGlobalInicial;
 PRECISION *perfil_instrumental;
-PRECISION *G;
+PRECISION *spectral_psf;
 int FGlobal,HGlobal,uuGlobal;
 
-PRECISION *d_spectra,*spectra;
+PRECISION *d_spectra,*spectra,*spectra_tmp,*output;
 
 //Number of lambdas in the input profiles
 int NLAMBDA = 0;
 int PSF_ON_OFF = 0;
+int CONT_POS = 0;
+int CONT_POS_SHIFT = 1;
+int PSF_SAMPLING_POINTS;
 
 //Convolutions values
-int NMUESTRAS_G	= 0;
-PRECISION FWHM = 0;
-PRECISION DELTA = 0;
-
-int INSTRUMENTAL_CONVOLUTION = 0;
-int INSTRUMENTAL_CONVOLUTION_WITH_PSF = 0;
+int n_samples	= 0;
+int INPUT_PSF = 0;
 int CLASSICAL_ESTIMATES = 0;
 int RFS = 0;
 
-// PSF obtenida desde los datos teoricos de CRISP CRISP_6173_28mA.psf
-// Se usa el scrip interpolar_psf.m
-const PRECISION crisp_psf[141] = {0.0004,0.0004,0.0005,0.0005,0.0005,0.0005,0.0006,0.0006,0.0006,0.0007,0.0007,0.0008,0.0008,0.0009,0.0009,0.0010,0.0010,0.0011,0.0012,0.0012,0.0013,0.0014,
-							0.0015,0.0016,0.0017,0.0019,0.0020,0.0021,0.0023,0.0025,0.0027,0.0029,0.0031,0.0034,0.0037,0.0040,0.0044,0.0048,0.0052,0.0057,0.0062,0.0069,0.0076,0.0083,
-							0.0092,0.0102,0.0114,0.0127,0.0142,0.0159,0.0178,0.0202,0.0229,0.0261,0.0299,0.0343,0.0398,0.0465,0.0546,0.0645,0.0765,0.0918,0.1113,0.1363,0.1678,0.2066,
-							0.2501,0.2932,0.3306,0.3569,0.3669,0.3569,0.3306,0.2932,0.2501,0.2066,0.1678,0.1363,0.1113,0.0918,0.0765,0.0645,0.0546,0.0465,0.0398,0.0343,0.0299,0.0261,
-							0.0229,0.0202,0.0178,0.0159,0.0142,0.0127,0.0114,0.0102,0.0092,0.0083,0.0076,0.0069,0.0062,0.0057,0.0052,0.0048,0.0044,0.0040,0.0037,0.0034,0.0031,0.0029,
-							0.0027,0.0025,0.0023,0.0021,0.0020,0.0019,0.0017,0.0016,0.0015,0.0014,0.0013,0.0012,0.0012,0.0011,0.0010,0.0010,0.0009,0.0009,0.0008,0.0008,0.0007,0.0007,
-							0.0006,0.0006,0.0006,0.0005,0.0005,0.0005,0.0005,0.0004,0.0004};
-
-void call_milos(const int *options, size_t size, const double *waveaxis, double *weight, double *initial_model, const double *inputdata,double *outputdata) {
+void call_milos(const int *options,
+	const int *size,
+	const double *waveaxis,
+	double *weight,
+	const double *initial_model,
+	const double *inputdata,
+	const double *cavity,
+	double *outputdata) {
     // size_t index;
     // for (index = 0; index < size; ++index)
     //     outputdata[index] = inputdata[index] * 2.0;
@@ -141,6 +140,7 @@ void call_milos(const int *options, size_t size, const double *waveaxis, double 
 	double * wlines;
 	int nwlines;
 	double *lambda;
+	double *init_lambda;
 	int nlambda;
 	PRECISION *spectro;
 	// int ny,i,j;
@@ -169,7 +169,7 @@ void call_milos(const int *options, size_t size, const double *waveaxis, double 
 	double dat[7]={CUANTIC_NWL,CUANTIC_SLOI,CUANTIC_LLOI,CUANTIC_JLOI,CUANTIC_SUPI,CUANTIC_LUPI,CUANTIC_JUPI};
 
 	int Max_iter;
-    // added 20 Oct 2022 (now initial model is an input from pymilos)
+	// added 20 Oct 2022 (now initial model is an input from pymilos)
     PRECISION INITIAL_MODEL_B = initial_model[0];
     PRECISION INITIAL_MODEL_GM = initial_model[1];
     PRECISION INITIAL_MODEL_AZI = initial_model[2];
@@ -187,16 +187,18 @@ void call_milos(const int *options, size_t size, const double *waveaxis, double 
 
 	if (options[4] != 0){
 		PSF_ON_OFF = 1;
-		INSTRUMENTAL_CONVOLUTION = 1;
-		FWHM = options[4]/1000;
-		DELTA = options[5]/1000;
-		NMUESTRAS_G = options[6];
+		PRECISION FWHM = options[4]/1000.;
+		PRECISION DELTA = options[5]/1000.;
+		PSF_SAMPLING_POINTS = options[6];
+		if(PSF_SAMPLING_POINTS % 2 == 0) PSF_SAMPLING_POINTS = PSF_SAMPLING_POINTS + 1; //we need to force to be odd (impar) number
+
+		spectral_psf = calloc(PSF_SAMPLING_POINTS,sizeof(PRECISION)); // allocate memory (zeros)
+
+		gaussian_psf(FWHM,PSF_SAMPLING_POINTS,DELTA,spectral_psf);
+
 	}
 
 	nlambda=NLAMBDA;
-	if(INSTRUMENTAL_CONVOLUTION){
-		G=vgauss(FWHM,NMUESTRAS_G,DELTA);
-	}
 
 	cuantic=create_cuantic(dat);
 
@@ -229,6 +231,7 @@ void call_milos(const int *options, size_t size, const double *waveaxis, double 
 	miter=Max_iter;
 
 	lambda=calloc(nlambda,sizeof(double));
+	init_lambda=calloc(nlambda,sizeof(double));
 	spectro=calloc(nlambda*4,sizeof(PRECISION));
 
 	// double lin;
@@ -250,21 +253,34 @@ void call_milos(const int *options, size_t size, const double *waveaxis, double 
 	np = 0;
 
 	for(landa_loop=0;landa_loop<NLAMBDA;landa_loop++){
-		lambda[landa_loop] = waveaxis[landa_loop];
+		init_lambda[landa_loop] = waveaxis[landa_loop];
 		// printf("value is = %f\n",lambda[landa_loop]);
 	}
 
-	if(!RFS){ // SI RFS == 0
-		// printf("\n\n Pasa al loop\n");
+    PRECISION d1, d2;
+    d1 = (PRECISION)init_lambda[0] - (PRECISION)init_lambda[1];
+    d2 = (PRECISION)init_lambda[nlambda-2] - (PRECISION)init_lambda[nlambda-1];
+    if (fabs(d1)<fabs(d2)){
+        CONT_POS = nlambda -1;
+		CONT_POS_SHIFT = 0;
+    }
+
+	// If RFS = 0 meaning you are using inversion mode
+	if(!RFS){
 		cnt_model = 0;
-		long n_profiles;
-		n_profiles = size/4/NLAMBDA;
+
+		// find number of profiles to invert
+		int n_profiles = (*size)/4/NLAMBDA;
 		printf("profiles to invert = %d\n",n_profiles);
+
+		// initialize counter for n_profiles
+		register int profile_idx = 0;
+
 		do{
 			nsub=0;
 			neje=0;
-			np = contador*NLAMBDA*4;
-			while (nsub<NLAMBDA){ 
+			np = profile_idx*NLAMBDA*4;
+			while (nsub<NLAMBDA){
 				spectro[nsub] = inputdata[nsub + np];
 				spectro[nsub+NLAMBDA] = inputdata[nsub + NLAMBDA + np];
 				spectro[nsub+NLAMBDA*2] = inputdata[nsub + NLAMBDA*2 + np];
@@ -276,7 +292,7 @@ void call_milos(const int *options, size_t size, const double *waveaxis, double 
 				nsub++;
 				neje++;
 			}
-			
+
 			//Initial Model
 			initModel.eta0 = INITIAL_MODEL_ETHA0;
 			initModel.B = INITIAL_MODEL_B; //200 700
@@ -289,6 +305,17 @@ void call_milos(const int *options, size_t size, const double *waveaxis, double 
 			initModel.alfa = 1;							//0.38; //stray light factor
 			initModel.S0 = INITIAL_MODEL_S0;
 			initModel.S1 = INITIAL_MODEL_S1;
+
+			if(cavity[profile_idx]!=0){
+				for(landa_loop=0;landa_loop<NLAMBDA;landa_loop++){
+					lambda[landa_loop] = init_lambda[landa_loop] - cavity[profile_idx];
+				}
+			}
+			else{
+				for(landa_loop=0;landa_loop<NLAMBDA;landa_loop++){
+					lambda[landa_loop] = init_lambda[landa_loop];
+				}
+			}
 
 			if(CLASSICAL_ESTIMATES){
 
@@ -334,7 +361,7 @@ void call_milos(const int *options, size_t size, const double *waveaxis, double 
 			// printf("chi2 is = %f\n",chisqrf);
 
 			// [contador;iter;B;GM;AZI;etha0;lambdadopp;aa;vlos;S0;S1;final_chisqr];
-			outputdata[cnt_model] = contador;
+			outputdata[cnt_model] = profile_idx;
 			outputdata[cnt_model+1] = iter;
 			outputdata[cnt_model+2] = initModel.B;
 			outputdata[cnt_model+3] = initModel.gm;
@@ -347,92 +374,103 @@ void call_milos(const int *options, size_t size, const double *waveaxis, double 
 			outputdata[cnt_model+10] = initModel.S1;
 			outputdata[cnt_model+11] = chisqrf;
 			cnt_model = cnt_model + 12;
-			contador++;
+			profile_idx++;
 
 			// for(landa_loop=0;landa_loop<12;landa_loop++){
 			// 	printf("value is = %f\n",outputdata[landa_loop]);
 			// }
 
-		} while(contador < n_profiles);
+		} while(profile_idx < n_profiles);
 	}
+	else{   // If RFS != 0 meaning you are using synthesis and RFS mode
 
-    // size_t index;
-    // for (index = 0; index < size; ++index)
-    //     outputdata[index] = inputdata[index] * 2.0;
-	// else{   //when RFS is activated
+		// find number of profiles to synthesize
+		int n_profiles = (*size)/9;
+		printf("profiles to synthesize = %d\n",n_profiles);
 
-	// 	lambda[0] =6.17320100e+003;
-	// 	lambda[1] =6.1732710e+003;
-	// 	lambda[2] =6.17334130e+003;
-	// 	lambda[3] =6.17341110e+003;
-	// 	lambda[4] =6.17348100e+003;
-	// 	lambda[5] =6.17376100e+003;
+		// initialize counter for n_profiles
+		register int p_idx = 0;
+		// initialize counter for wavelength
+		register int w_idx = 0;
+		// initialize counter for derivatives (0-9)
+		register int d_idx = 0;
 
-	// 	do{
-	// 		int contador,iter;
-	// 		double chisqr;
-	// 		int NMODEL=12; //Numero de parametros del modelo
+		// these two are, so far, constant always
+		initModel.mac  = 0.0;
+		initModel.alfa = 1;
 
+		do{
+			// jump from 9 to 9 model parameters
+			np = p_idx*9;
 
-	// 		//num,iter,B,GM,AZ,ETA0,dopp,aa,vlos,S0,S1,chisqr,
-	// 		if((rfscanf=fscanf(fichero,"%d",&contador))!= EOF){
-	// 			//rfscanf=fscanf(fichero,"%d",&contador);
-	// 			rfscanf=fscanf(fichero,"%d",&iter);
-	// 			rfscanf=fscanf(fichero,"%lf",&initModel.B);
-	// 			rfscanf=fscanf(fichero,"%lf",&initModel.gm);
-	// 			rfscanf=fscanf(fichero,"%lf",&initModel.az);
-	// 			rfscanf=fscanf(fichero,"%lf",&initModel.eta0);
-	// 			rfscanf=fscanf(fichero,"%lf",&initModel.dopp);
-	// 			rfscanf=fscanf(fichero,"%lf",&initModel.aa);
-	// 			rfscanf=fscanf(fichero,"%lf",&initModel.vlos);
-	// 			rfscanf=fscanf(fichero,"%lf",&initModel.S0);
-	// 			rfscanf=fscanf(fichero,"%lf",&initModel.S1);
-	// 			rfscanf=fscanf(fichero,"%le",&chisqr);
+			initModel.B    = inputdata[np];
+			initModel.gm   = inputdata[np + 1];
+			initModel.az   = inputdata[np + 2];
+			initModel.eta0 = inputdata[np + 3];
+			initModel.dopp = inputdata[np + 4];
+			initModel.aa   = inputdata[np + 5];
+			initModel.vlos = inputdata[np + 6];
+			initModel.S0   = inputdata[np + 7];
+			initModel.S1   = inputdata[np + 8];
 
-	// 			mil_sinrf(cuantic,&initModel,wlines,nwlines,lambda,nlambda,spectra,AH,slight,0,filter);
+			if(cavity[p_idx]!=0){
+				for(landa_loop=0;landa_loop<NLAMBDA;landa_loop++){
+					lambda[landa_loop] = init_lambda[landa_loop] - cavity[p_idx];
+				}
+			}
+			else{
+				for(landa_loop=0;landa_loop<NLAMBDA;landa_loop++){
+					lambda[landa_loop] = init_lambda[landa_loop];
+				}
+			}
 
-	// 			spectral_synthesis_convolution();
+			// synthesize the profiles
+			mil_sinrf(cuantic,&initModel,wlines,nwlines,lambda,nlambda,spectra,AH,slight,0,filter);
 
-	// 			me_der(cuantic,&initModel,wlines,nwlines,lambda,nlambda,d_spectra,AH,slight,0,filter);
-	// 			response_functions_convolution();
+			// convolve the profiles
+			spectral_synthesis_convolution();
 
-	// 			int kk;
-	// 			for(kk=0;kk<NLAMBDA;kk++){
-	// 				printf("%lf %le %le %le %le \n",lambda[kk],spectra[kk],spectra[kk + NLAMBDA],spectra[kk + NLAMBDA*2],spectra[kk + NLAMBDA*3]);
-	// 			}
+			// this will be always an output
+			for(w_idx=NLAMBDA;w_idx--;){
+				outputdata[w_idx +             4*NLAMBDA*p_idx] = spectra[w_idx];
+				outputdata[w_idx + NLAMBDA   + 4*NLAMBDA*p_idx] = spectra[w_idx + NLAMBDA];
+				outputdata[w_idx + NLAMBDA*2 + 4*NLAMBDA*p_idx] = spectra[w_idx + NLAMBDA*2];
+				outputdata[w_idx + NLAMBDA*3 + 4*NLAMBDA*p_idx] = spectra[w_idx + NLAMBDA*3];
+			}
 
-	// 			if(RFS==2){
-	// 				int number_parametros = 0;
-	// 				for(number_parametros=0;number_parametros<NTERMS;number_parametros++){
-	// 					for(kk=0;kk<NLAMBDA;kk++){
-	// 						printf("%lf %le %le %le %le \n",lambda[kk],
-	// 											d_spectra[kk + NLAMBDA * number_parametros],
-	// 											d_spectra[kk + NLAMBDA * number_parametros + NLAMBDA * NTERMS],
-	// 											d_spectra[kk + NLAMBDA * number_parametros + NLAMBDA * NTERMS*2],
-	// 											d_spectra[kk + NLAMBDA * number_parametros + NLAMBDA * NTERMS*3]);
-	// 					}
-	// 				}
-	// 			}
-	// 		}
+			// if the RFS are activated, calculate them
+			if(RFS==2){
+				// calculate the RFS
+				me_der(cuantic,&initModel,wlines,nwlines,lambda,nlambda,d_spectra,AH,slight,0,filter);
 
-	// 	}while(rfscanf!=EOF );
-	// }
+				// convolve the RFS
+				response_functions_convolution();
 
-	// fclose(fichero);
+				// for(w_idx=NLAMBDA;w_idx--;){
+			 	// 	for(d_idx = 0;d_idx<NTERMS;d_idx++){
+				// 		outputdata[w_idx + NLAMBDA*d_idx +                    4*NLAMBDA*(p_idx+1)*n_profiles ] = d_spectra[w_idx + NLAMBDA*d_idx  ];
+				// 		outputdata[w_idx + NLAMBDA*d_idx + NLAMBDA*NTERMS   + 4*NLAMBDA*(p_idx+1)*n_profiles ] = d_spectra[w_idx + NLAMBDA*d_idx + NLAMBDA * NTERMS    ];
+				// 		outputdata[w_idx + NLAMBDA*d_idx + NLAMBDA*NTERMS*2 + 4*NLAMBDA*(p_idx+1)*n_profiles ] = d_spectra[w_idx + NLAMBDA*d_idx + NLAMBDA * NTERMS * 2];
+				// 		outputdata[w_idx + NLAMBDA*d_idx + NLAMBDA*NTERMS*3 + 4*NLAMBDA*(p_idx+1)*n_profiles ] = d_spectra[w_idx + NLAMBDA*d_idx + NLAMBDA * NTERMS * 3];
+				// 	}
+				// }
+			}
 
-	// //printf("\n\n TOTAL sec : %.16g segundos\n", total_secs);
+			p_idx++;  //next profile
+
+		} while(p_idx < n_profiles);
+	}
 
 	free(spectro);
 	free(lambda);
+	free(init_lambda);
 	free(cuantic);
 	free(wlines);
 
 	LiberarMemoriaSinteisisDerivadas();
 	Liberar_Puntero_Calculos_Compartidos();
 
-	free(G);
-
-	// return 0;
+	if(PSF_ON_OFF) free(spectral_psf);
 
 }
 
@@ -452,7 +490,7 @@ int main(int argc,char **argv){
 	double toplim;
 	int miter;
 	// PRECISION weight[4]={1.,10.,10.,4.};
-	PRECISION weight[4]={1.,4.,5.4,4.1}; // 20 Oct 2022
+	PRECISION weight[4]={1.,4.,5.4,4.1}; // DC update for HRT (with ISS off)
 	int nweight;
 
 	clock_t t_ini, t_fin;
@@ -478,27 +516,27 @@ int main(int argc,char **argv){
 
 	char *nombre,*input_iter;
 	int Max_iter;
-    
+
 	// Since initial model was removed from defines.h, we need to add it here for CMILOS
 	// 20 Oct 2022
-	PRECISION INITIAL_MODEL_B = 400;
+    PRECISION INITIAL_MODEL_B = 400;
     PRECISION INITIAL_MODEL_GM = 30;
     PRECISION INITIAL_MODEL_AZI = 120;
-    PRECISION INITIAL_MODEL_ETHA0 = 1;
-    PRECISION INITIAL_MODEL_LAMBDADOPP = 0.05;  //en A
-    PRECISION INITIAL_MODEL_AA = 1.5;
+    PRECISION INITIAL_MODEL_ETHA0 = 1; // DC change for HRT
+    PRECISION INITIAL_MODEL_LAMBDADOPP = 0.05;  //en A // DC change for HRT
+    PRECISION INITIAL_MODEL_AA = 1.5; // DC change for HRT
     PRECISION INITIAL_MODEL_VLOS = 0.01; // Km/s
-    PRECISION INITIAL_MODEL_S0 = 0.22;
+    PRECISION INITIAL_MODEL_S0 = 0.22; // DC change for HRT
     PRECISION INITIAL_MODEL_S1 = 0.85;
-    
-	//milos NLAMBDA MAX_ITER CLASSICAL_ESTIMATES RFS [FWHM DELTA NPOINTS] perfil.txt
+
+	//milos NLAMBDA MAX_ITER CLASSICAL_ESTIMATES RFS [FWHM DELTA NPOINTS] profiles.txt
 
 	if(argc!=6 && argc != 7 && argc !=9){
-		printf("milos: Error en el numero de parametros: %d .\n Pruebe: milos NLAMBDA MAX_ITER CLASSICAL_ESTIMATES RFS [FWHM(in A) DELTA(in A) NPOINTS] perfil.txt\n",argc);
-		printf("O bien: milos NLAMBDA MAX_ITER CLASSICAL_ESTIMATES RFS [DELTA(in A)] perfil.txt\n  --> for using stored CRISP's PSF\n");
+		printf("milos: Error in number of input parameters: %d .\n Try: milos NLAMBDA MAX_ITER CLASSICAL_ESTIMATES RFS [FWHM(in A) DELTA(in A) NPOINTS] perfil.txt\n",argc);
+		printf("Or else: milos NLAMBDA MAX_ITER CLASSICAL_ESTIMATES RFS [DELTA(in A)] profiles.txt\n  --> for using internally stored PSF\n");
 		printf("Note : CLASSICAL_ESTIMATES=> 0: Disabled, 1: Enabled, 2: Only Classical Estimates.\n");
 		printf("RFS : 0: Disabled     1: Synthesis      2: Synthesis and Response Functions\n");
-		printf("Note when RFS>0: perfil.txt is considered as models.txt. \n");
+		printf("Note when RFS>0: profiles.txt is considered as models.txt. \n");
 
 		return -1;
 	}
@@ -525,68 +563,35 @@ int main(int argc,char **argv){
 	}
 	else{
 		if (atoi(argv[5]) != 0){
+			PSF_SAMPLING_POINTS = 0;
+			PRECISION FWHM = 0;
+			PRECISION DELTA = 0;
 			PSF_ON_OFF = 1;
-			INSTRUMENTAL_CONVOLUTION = 1;
 			if(argc ==7){
-				INSTRUMENTAL_CONVOLUTION_WITH_PSF = 1;
+				INPUT_PSF = 1;
 				DELTA = atof(argv[5]);
 				nombre = argv[6];
 				FWHM = 0.035;
 			}
 			else{
-				INSTRUMENTAL_CONVOLUTION_WITH_PSF = 0;
-				FWHM = atof(argv[5])/1000;
-				DELTA = atof(argv[6])/1000;
-				NMUESTRAS_G = atoi(argv[7]);
+				INPUT_PSF = 0;
+				// FWHM = atof(argv[5])/1000.;
+				// DELTA = atof(argv[6])/1000.;
+				sscanf(argv[5], "%lf", &FWHM);
+				sscanf(argv[6], "%lf", &DELTA);
+				FWHM = FWHM / 1000.0 ;
+				DELTA = DELTA / 1000.0 ;
+				PSF_SAMPLING_POINTS = atoi(argv[7]);
 				nombre = argv[8];
 			}
+    	if(PSF_SAMPLING_POINTS % 2 == 0) PSF_SAMPLING_POINTS = PSF_SAMPLING_POINTS + 1; //we need to force to be odd (impar) number
+		spectral_psf = calloc(PSF_SAMPLING_POINTS,sizeof(PRECISION));
+		gaussian_psf(FWHM,PSF_SAMPLING_POINTS,DELTA,spectral_psf);
 		}
 		nombre = argv[8];
 	}
 
-	// printf("%s\n",argv[1]);
-	// printf("%s\n",argv[2]);
-	// printf("%s\n",argv[3]);
-	// printf("%s\n",argv[4]);
-	// printf("%s\n",argv[5]);
-	// printf("%s\n",argv[6]);
-	// printf("%s\n",argv[7]);
-	// printf("%s\n",argv[8]);
-
 	nlambda=NLAMBDA;
-	//Generamos la gaussiana -> perfil instrumental
-
-
-
-	if(INSTRUMENTAL_CONVOLUTION){
-		G=vgauss(FWHM,NMUESTRAS_G,DELTA);
-
-
-		if(INSTRUMENTAL_CONVOLUTION_WITH_PSF){
-			//if you wish to convolution with other instrumental profile you have to declare here and to asign it to "G"
-			free(G);
-			NMUESTRAS_G = 9;
-
-			G=vgauss(FWHM,NMUESTRAS_G,DELTA); //solo para reservar memoria
-
-			int kk;
-			PRECISION sum =0;
-			for(kk=0;kk<NMUESTRAS_G;kk++){
-				int pos = 70 - (int)((DELTA/0.005)*(((int)(NMUESTRAS_G/2))-kk));
-
-				if(pos<0 || pos > 140) //140 length de crisp_psf
-					G[kk]=0;
-				else
-					G[kk] = crisp_psf[pos];  //70 es el centro de psf
-
-				sum += G[kk];
-			}
-
-			for(kk=0;kk<NMUESTRAS_G;kk++)
-				G[kk] /= sum;
-		}
-	}
-
 
 	cuantic=create_cuantic(dat);
 	Inicializar_Puntero_Calculos_Compartidos();
@@ -654,13 +659,15 @@ int main(int argc,char **argv){
 	int nsub,indaux;
 	indaux=0;
 
+    PRECISION d1, d2;
+
 	if(!RFS){ // SI RFS ==0
 		do{
 			neje=0;
 			nsub=0;
-			 while (neje<NLAMBDA && (rfscanf=fscanf(fichero,"%lf %lf %lf %lf %lf",&lin,&iin,&qin,&uin,&vin))!= EOF){ 
+			 while (neje<NLAMBDA && (rfscanf=fscanf(fichero,"%lf %lf %lf %lf %lf",&lin,&iin,&qin,&uin,&vin))!= EOF){
 
-				lambda[nsub]=lin;	 
+				lambda[nsub]=lin;
 				spectro[nsub]=iin;
 				spectro[nsub+NLAMBDA]=qin;
 				spectro[nsub+NLAMBDA*2]=uin;
@@ -668,6 +675,12 @@ int main(int argc,char **argv){
 				nsub++;
 				neje++;
 			}
+		    d1 = (PRECISION)lambda[0] - (PRECISION)lambda[1];
+		    d2 = (PRECISION)lambda[nlambda-2] - (PRECISION)lambda[nlambda-1];
+		    if (fabs(d1)<fabs(d2)){
+		        CONT_POS = nlambda -1;
+				CONT_POS_SHIFT = 0;
+		    }
 			if(rfscanf!=EOF ){  //   && contador==8
 
 				//Initial Model
@@ -758,18 +771,29 @@ int main(int argc,char **argv){
 			nsub++;
 			neje++;
 		}
+	    d1 = (PRECISION)lambda[0] - (PRECISION)lambda[1];
+	    d2 = (PRECISION)lambda[nlambda-2] - (PRECISION)lambda[nlambda-1];
+	    if (fabs(d1)<fabs(d2)){
+	        CONT_POS = nlambda -1;
+			CONT_POS_SHIFT = 0;
+	    }
 
+		// int kkk;
+		// printf("heck\n");
+		// for(kkk=0;kkk<NLAMBDA;kkk++){
+		// 	printf("%lf \n",lambda[kkk]);
+		// }
+		// printf("heck\n");
 		do{
 			int contador,iter;
 			double chisqr;
-			int NMODEL=9; //Numero de parametros del modelo
+			int NMODEL=10; //Numero de parametros del modelo
 
 
 			//num,iter,B,GM,AZ,ETA0,dopp,aa,vlos,S0,S1,chisqr,
 			if((rfscanf=fscanf(fichero,"%d",&contador))!= EOF){
-				//rfscanf=fscanf(fichero,"%d",&contador);  // DOS 28 March 2023
 				//rfscanf=fscanf(fichero,"%d",&iter);      // DOS 28 March 2023
-				rfscanf=fscanf(fichero,"%d",&iter);
+				//rfscanf=fscanf(fichero,"%d",&iter);     // DOS 28 March 2023
 				rfscanf=fscanf(fichero,"%lf",&initModel.B);
 				rfscanf=fscanf(fichero,"%lf",&initModel.gm);
 				rfscanf=fscanf(fichero,"%lf",&initModel.az);
@@ -781,11 +805,38 @@ int main(int argc,char **argv){
 				rfscanf=fscanf(fichero,"%lf",&initModel.S1);
 				//rfscanf=fscanf(fichero,"%le",&chisqr);
 
+				// printf("%d\n",contador);
+				// printf("%f\n",initModel.B);
+				// printf("%f\n",initModel.gm);
+				// printf("%f\n",initModel.az);
+				// printf("%f \n",initModel.eta0);
+				// printf("%f\n",initModel.dopp);
+				// printf("%f\n",initModel.aa);
+				// printf("%f\n",initModel.vlos); //km/s
+				// //printf("alfa \t:%f\n",initModel.alfa); //stay light factor
+				// printf("%f\n",initModel.S0);
+				// printf("%f\n",initModel.S1);
+
+				// int kkk;
+				// for(kkk=0;kkk<nlambda;kkk++){
+				// 	printf("l-> %lf \n",lambda[kkk]);
+				// }
+
 				mil_sinrf(cuantic,&initModel,wlines,nwlines,lambda,nlambda,spectra,AH,slight,0,filter);
+				// int kkk;
+
+				// for(kkk=0;kkk<nlambda;kkk++){
+				// 	printf("Before -> %lf \n",spectra[kkk]);
+				// }
 
 				spectral_synthesis_convolution();
 
+				// for(kkk=0;kkk<nlambda;kkk++){
+				// 	printf("After -> %lf \n",spectra[kkk]);
+				// }
+
 				me_der(cuantic,&initModel,wlines,nwlines,lambda,nlambda,d_spectra,AH,slight,0,filter);
+
 				response_functions_convolution();
 
 				int kk;
@@ -822,7 +873,7 @@ int main(int argc,char **argv){
 	LiberarMemoriaSinteisisDerivadas();
 	Liberar_Puntero_Calculos_Compartidos();
 
-	free(G);
+	free(spectral_psf);
 
 	return 0;
 }
@@ -1032,72 +1083,39 @@ int CalculaNfree(PRECISION *spectro,int nspectro){
 * @Date:  Nov. 2011
 *
 */
-void estimacionesClasicas(PRECISION lambda_0,double *lambda,int nlambda,PRECISION *spectro,Init_Model *initModel){
+void estimacionesClasicas(PRECISION lambda_0,double *lambda,int nlambda, PRECISION *spectro,Init_Model *initModel){
 
-	// Modified by Daniele Calchetti (DC) calchetti@mps.mpg.de in March 2022 
+	// Modified by Daniele Calchetti (DC) calchetti@mps.mpg.de in March 2022
 
 	PRECISION x,y,aux,LM_lambda_plus,LM_lambda_minus,Blos,beta_B,Ic,Vlos;
 	PRECISION *spectroI,*spectroQ,*spectroU,*spectroV;
 	PRECISION L,m,gamma, gamma_rad,tan_gamma,maxV,minV,C,maxWh,minWh;
-	int i,j;
-    // added by DC for continuum position
-    PRECISION d1, d2;
-    int cont_pos, i0, ii;
-    // end DC
-
+	register int i,j;
+	int i0 = 0;
+	if (CONT_POS_SHIFT == 0) i0 = 1 ;
 
 	//Es necesario crear un lambda en FLOAT para probar como se hace en la FPGA
 	PRECISION *lambda_aux;
 	lambda_aux= (PRECISION*) calloc(nlambda,sizeof(PRECISION));
-
-	// commented on March 2022 DOS (FPGA HERITAGE)
-	// PRECISION lambda0,lambda1,lambda2,lambda3,lambda4;
-	// lambda0 = 6.1732012e+3 + 0; // RTE_WL_0
-	// lambda1 = lambda0 + 0.070000000; //RTE_WL_STEP
-	// lambda2 = lambda1 + 0.070000000;
-	// lambda3 = lambda2 + 0.070000000;
-	// lambda4 = lambda3 + 0.070000000;
-
-	// commented on March 2022 DOS (FPGA HERITAGE)
-	// lambda_aux[0]=lambda0;
-	// lambda_aux[1]=lambda1;
-	// lambda_aux[2]=lambda2;
-	// lambda_aux[3]=lambda3;
-	// lambda_aux[4]=lambda4;
-
-	// Ic= spectro[nlambda-1]; // Continuo ultimo valor de I
-	// Ic= spectro[0]; // Continuo primer valor de I
-
-    // added by DC for continuum position
-    d1 = (PRECISION)lambda[0] - (PRECISION)lambda[1];
-    d2 = (PRECISION)lambda[nlambda-2] - (PRECISION)lambda[nlambda-1];
-    if (fabs(d1)>fabs(d2)){
-        cont_pos = 0;
-        i0 = 0;
-        ii = 1;
-    }
-    else{
-        cont_pos = nlambda -1;
-        i0 = 1;
-        ii = 0;
-    }
-    Ic= spectro[cont_pos]; // Continuo ultimo valor de I
-    // end DC
 
 	spectroI=spectro;
 	spectroQ=spectro+nlambda;
 	spectroU=spectro+nlambda*2;
 	spectroV=spectro+nlambda*3;
 
-	//Sino queremos usar el lambda de la FPGA
+	// counts from i=0, nlambda-1 so assumes that the continuum is in the red
+	// to correct this behaviour when the continuum is in the blue, we added cont_pos parameter and ii to the counter
+
+    Ic= spectro[CONT_POS]; // Continuo ultimo valor de I
+
 	for(i=0;i<nlambda-1;i++){
-		lambda_aux[i] = (PRECISION)lambda[i+ii];// added by DC for continuum position
+		lambda_aux[i] = (PRECISION)lambda[i+CONT_POS_SHIFT];// added by DC for continuum position
 	}
 
 	x=0;
 	y=0;
 	for(i=0;i<nlambda-1;i++){
-		aux = ( Ic - (spectroI[i+ii]+ spectroV[i+ii])); // added by DC for continuum position
+		aux = ( Ic - (spectroI[i+CONT_POS_SHIFT]+ spectroV[i+CONT_POS_SHIFT])); // added by DC for continuum position
 		x = x +  aux * (lambda_aux[i]-lambda_0);
 		y = y + aux;
 	}
@@ -1112,7 +1130,7 @@ void estimacionesClasicas(PRECISION lambda_0,double *lambda,int nlambda,PRECISIO
 	x=0;
 	y=0;
 	for(i=0;i<nlambda-1;i++){
-		aux = ( Ic - (spectroI[i+ii] - spectroV[i+ii]));// added by DC for continuum position
+		aux = ( Ic - (spectroI[i+CONT_POS_SHIFT] - spectroV[i+CONT_POS_SHIFT]));// added by DC for continuum position
 		x= x +  aux * (lambda_aux[i]-lambda_0);
 		y = y + aux;
 	}
@@ -1133,11 +1151,11 @@ void estimacionesClasicas(PRECISION lambda_0,double *lambda,int nlambda,PRECISIO
 	x = 0;
 	y = 0;
 	for(i=0;i<nlambda-1;i++){
-		L = fabs( sqrtf( spectroQ[i+ii]*spectroQ[i+ii] + spectroU[i+ii]*spectroU[i+ii] )); // added by DC for continuum position
+		L = fabs( sqrtf( spectroQ[i+CONT_POS_SHIFT]*spectroQ[i+CONT_POS_SHIFT] + spectroU[i+CONT_POS_SHIFT]*spectroU[i+CONT_POS_SHIFT] )); // added by DC for continuum position
 		m = fabs( (4 * (lambda_aux[i]-lambda_0) * L ));// / (3*C*Blos) ); //2*3*C*Blos mod abril 2016 (en test!)
 
-		x = x + fabs(spectroV[i+ii]) * m; // added by DC for continuum position
-		y = y + fabs(spectroV[i+ii]) * fabs(spectroV[i+ii]); // added by DC for continuum position
+		x = x + fabs(spectroV[i+CONT_POS_SHIFT]) * m; // added by DC for continuum position
+		y = y + fabs(spectroV[i+CONT_POS_SHIFT]) * fabs(spectroV[i+CONT_POS_SHIFT]); // added by DC for continuum position
 	}
 
 	y = y * fabs((3*C*Blos));
@@ -1315,7 +1333,7 @@ int mil_svd(PRECISION *h,PRECISION *beta,PRECISION *delta){
 			h1[j]=h[j];
 		}
 		svdcmp(h1,NTERMS,NTERMS,w,v);
- 
+
  		static PRECISION vaux[NTERMS*NTERMS],waux[NTERMS];
 
 		for(j=0;j<NTERMS*NTERMS;j++){
@@ -1345,7 +1363,7 @@ int mil_svd(PRECISION *h,PRECISION *beta,PRECISION *delta){
 // 		float wmax,wmin,**un,*wn,**vn,*x; //*b,,*x; int i,j;
 
 // 		for(i=1;i<=NTERMS;i++)
-// 			for(j=1;j<=NTERMS;j++) 
+// 			for(j=1;j<=NTERMS;j++)
 // 				un[i][j]=h[i*(j+1)];
 // 		svdcmp(un,NTERMS,NTERMS,wn,vn);
 // 		wmax=0.0;
@@ -1573,131 +1591,83 @@ int check(Init_Model *model){
 
 void spectral_synthesis_convolution(){
 
-	int i;
-	int nlambda=NLAMBDA;
+	register int i, j;
+	int nlambda = NLAMBDA;
 
-	//convolucionamos los perfiles IQUV (spectra)
-	if(INSTRUMENTAL_CONVOLUTION){
+	if(PSF_ON_OFF){   //convolution of synthetic Stokes IQUV profiles starts here
 
 		PRECISION Ic;
 
+		//convolucion de I
+		Ic=spectra[CONT_POS];
 
-		if(!INSTRUMENTAL_CONVOLUTION_INTERPOLACION){
-			//convolucion de I
-			Ic=spectra[nlambda-1];
+		for(i=0;i<nlambda-1;i++)
+			spectra_tmp[i]=Ic-spectra[i+CONT_POS_SHIFT];
+
+		// direct_convolution(spectra,nlambda-1,spectral_psf,NMUESTRAS_G,1);  //no convolucionamos el ultimo valor Ic
+		// printf("CONT_POS %d %d %d \n",CONT_POS, i0, ii);
+		convolution(spectra_tmp, spectral_psf, NLAMBDA - 1, PSF_SAMPLING_POINTS, output);
+
+		for(i=0;i<nlambda-1;i++)
+			spectra[i+CONT_POS_SHIFT]=Ic-output[i];
+
+		//convolucion QUV
+		for(j=1;j<NPARMS;j++){
+			for(i=0;i<nlambda-1;i++)
+				spectra_tmp[i] = spectra[i+CONT_POS_SHIFT + NLAMBDA*j];
+
+			// for(i=0;i<nlambda;i++)
+			// 	output[i] = 0.;
+
+			convolution(spectra_tmp, spectral_psf, NLAMBDA - 1, PSF_SAMPLING_POINTS, output);
 
 			for(i=0;i<nlambda-1;i++)
-				spectra[i]=Ic-spectra[i];
+				spectra[i+CONT_POS_SHIFT + NLAMBDA*j] = output[i];
 
-
-
-			direct_convolution(spectra,nlambda-1,G,NMUESTRAS_G,1);  //no convolucionamos el ultimo valor Ic
-
-
-			for(i=0;i<nlambda-1;i++)
-				spectra[i]=Ic-spectra[i];
-
-			//convolucion QUV
-			for(i=1;i<NPARMS;i++)
-				direct_convolution(spectra+nlambda*i,nlambda-1,G,NMUESTRAS_G,1);  //no convolucionamos el ultimo valor
 		}
-		else{
-			if(NLAMBDA == 6){
 
-				//convolucion de I
-				Ic=spectra[nlambda-1];
+		//convolucion QUV
+		// for(i=1;i<NPARMS;i++)
+		// 	direct_convolution(spectra+nlambda*i,nlambda-1,spectral_psf,NMUESTRAS_G,1);  //no convolucionamos el ultimo valor
 
-				for(i=0;i<nlambda-1;i++)
-					spectra[i]=Ic-spectra[i];
-
-				PRECISION *spectra_aux;
-				spectra_aux =  (PRECISION*) calloc(nlambda*2-2,sizeof(PRECISION));
-
-				int j=0;
-				for(i=0,j=0;i<nlambda*2-2;i=i+2,j++)
-					spectra_aux[i]=spectra[j];
-
-				for(i=1,j=0;i<nlambda*2-2;i=i+2,j++)
-					spectra_aux[i]=(spectra[j]+spectra[j+1])/2;
-
-				direct_convolution(spectra_aux,nlambda*2-2-1,G,NMUESTRAS_G,1);  //no convolucionamos el ultimo valor Ic
-
-				for(i=0,j=0;i<nlambda*2-2;i=i+2,j++)
-					spectra[j]=spectra_aux[i];
-
-				for(i=0;i<nlambda-1;i++)
-					spectra[i]=Ic-spectra[i];
-
-				free(spectra_aux);
-
-				//convolucion QUV
-				int k;
-				for(k=1;k<NPARMS;k++){
-
-					PRECISION *spectra_aux;
-					spectra_aux =  (PRECISION*) calloc(nlambda*2-2,sizeof(PRECISION));
-
-					int j=0;
-					for(i=0,j=0;i<nlambda*2-2;i=i+2,j++)
-						spectra_aux[i]=spectra[j+nlambda*k];
-
-					for(i=1,j=0;i<nlambda*2-2;i=i+2,j++)
-						spectra_aux[i]=(spectra[j+nlambda*k]+spectra[j+1+nlambda*k])/2;
-
-					direct_convolution(spectra_aux,nlambda*2-2-1,G,NMUESTRAS_G,1);  //no convolucionamos el ultimo valor Ic
-
-					for(i=0,j=0;i<nlambda*2-2;i=i+2,j++)
-						spectra[j+nlambda*k]=spectra_aux[i];
-
-					free(spectra_aux);
-				}
-			}
-		}
 	}
 }
 
 void response_functions_convolution(){
 
-	int i,j;
-	int nlambda=NLAMBDA;
+	register int i,j,k;
+	int nlambda = NLAMBDA;
 
 	//convolucionamos las funciones respuesta ( d_spectra )
-	if(INSTRUMENTAL_CONVOLUTION){
-		if(!INSTRUMENTAL_CONVOLUTION_INTERPOLACION){
+	if(PSF_ON_OFF){
+		for(i=0;i<NTERMS;i++){     // loop in physical parameters
+			if(i!=7){ // S0 not need convolution
+				for(j=0;j<NPARMS;j++){  // Loop in stokes parameter
+					if(i==8 & j==0) {// S1 Stokes I only need low cont
 
-			for(j=0;j<NPARMS;j++){
-				for(i=0;i<NTERMS;i++){
-					if(i!=7) //no convolucionamos S0
-						direct_convolution(d_spectra+nlambda*i+nlambda*NTERMS*j,nlambda-1,G,NMUESTRAS_G,1);  //no convolucionamos el ultimo valor
-				}
-			}
-		}
-		else{
+						PRECISION Ic;
+						Ic = d_spectra[CONT_POS+i*nlambda+j*nlambda*NTERMS];
+						// for(k=0;k<nlambda-1;k++)
+						for(k=nlambda-1;k--;)
+							spectra_tmp[k] = Ic-d_spectra[k+CONT_POS_SHIFT+i*nlambda+j*nlambda*NTERMS];
 
-			int k,m;
-			for(k=0;k<NPARMS;k++){
-				for(m=0;m<NTERMS;m++){
+						convolution(spectra_tmp, spectral_psf, NLAMBDA - 1, PSF_SAMPLING_POINTS, output);
 
-					PRECISION *spectra_aux;
-					spectra_aux =  (PRECISION*) calloc(nlambda*2-2,sizeof(PRECISION));
+						for(k=0;k<nlambda-1;k++)
+							d_spectra[k+CONT_POS_SHIFT+i*nlambda+j*nlambda*NTERMS] = Ic-output[k];
 
-					int j=0;
-					for(i=0,j=0;i<nlambda*2-2;i=i+2,j++)
-						spectra_aux[i]=d_spectra[j+nlambda*m+nlambda*NTERMS*k];
+					}
+					else {
+						for(k=0;k<nlambda-1;k++)
+							spectra_tmp[k] = d_spectra[k+CONT_POS_SHIFT+i*nlambda+j*nlambda*NTERMS];
 
-					for(i=1,j=0;i<nlambda*2-2;i=i+2,j++)
-						spectra_aux[i]=(d_spectra[j+nlambda*m+nlambda*NTERMS*k]+d_spectra[j+nlambda*m+nlambda*NTERMS*k])/2;
+						convolution(spectra_tmp, spectral_psf, NLAMBDA - 1, PSF_SAMPLING_POINTS, output);
 
-					direct_convolution(spectra_aux,nlambda*2-2-1,G,NMUESTRAS_G,1);  //no convolucionamos el ultimo valor Ic
-
-					for(i=0,j=0;i<nlambda*2-2;i=i+2,j++)
-						d_spectra[j+nlambda*m+nlambda*NTERMS*k]=spectra_aux[i];
-
-					free(spectra_aux);
+						for(k=0;k<nlambda-1;k++)
+							d_spectra[k+CONT_POS_SHIFT+i*nlambda+j*nlambda*NTERMS] = output[k];
+					}
 				}
 			}
 		}
 	}
-
 }
-

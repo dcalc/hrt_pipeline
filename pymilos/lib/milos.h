@@ -1,6 +1,13 @@
 #ifndef MILOS_H
 #define MILOS_H
 
-void call_milos(const int *options, size_t size, const double *waveaxis, double *weight, double *initial_model, const double *inputdata, double *outputdata);
+void call_milos(const int *options,
+	const int *size,
+	const double *waveaxis,
+	double *weight,
+	const double *initial_model,
+	const double *inputdata,
+	const double *cavity,
+	double *outputdata);
 
 #endif

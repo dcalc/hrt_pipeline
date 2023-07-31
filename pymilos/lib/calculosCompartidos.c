@@ -14,6 +14,7 @@ extern PRECISION * d_ei,*d_eq,*d_eu,*d_ev,*d_rq,*d_ru,*d_rv;
 extern PRECISION *dfi,*dshi;
 extern PRECISION *fi_p,*fi_b,*fi_r,*shi_p,*shi_b,*shi_r;
 extern PRECISION *spectra,*d_spectra;
+extern PRECISION *spectra_tmp, *output;
 extern PRECISION *etain,*etaqn,*etaun,*etavn,*rhoqn,*rhoun,*rhovn;
 extern PRECISION *etai,*etaq,*etau,*etav,*rhoq,*rhou,*rhov;
 extern PRECISION *parcial1,*parcial2,*parcial3;
@@ -68,7 +69,7 @@ void Asignar_Puntero_Calculos_Compartidos(int Numero,PRECISION * a,...){
 
 		PUNTEROS_CALCULOS_COMPARTIDOS[POSW_PUNTERO_CALCULOS_COMPARTIDOS]=(PRECISION *)va_arg(Param,PRECISION*);
 		POSW_PUNTERO_CALCULOS_COMPARTIDOS+=1;
-		Numero--;		
+		Numero--;
 	}
 
 	va_end(Param);
@@ -87,7 +88,7 @@ void Leer_Puntero_Calculos_Compartidos(int Numero,PRECISION ** a,...){
 	POSR_PUNTERO_CALCULOS_COMPARTIDOS+=1;
 
 	va_start(Param,a);
-	while (--Numero > 0){		
+	while (--Numero > 0){
 
 		aux=va_arg(Param,PRECISION**);
 		*aux=(PRECISION *)PUNTEROS_CALCULOS_COMPARTIDOS[POSR_PUNTERO_CALCULOS_COMPARTIDOS];
@@ -103,12 +104,14 @@ void Leer_Puntero_Calculos_Compartidos(int Numero,PRECISION ** a,...){
 void ReservarMemoriaSinteisisDerivadas(int numl){
 
     spectra=calloc(numl*NPARMS,sizeof(PRECISION));
-    d_spectra=calloc(numl*NTERMS*NPARMS,sizeof(PRECISION)); 
+    d_spectra=calloc(numl*NTERMS*NPARMS,sizeof(PRECISION));
+    spectra_tmp=calloc(numl,sizeof(PRECISION));
+    output=calloc(numl,sizeof(PRECISION));
 
 	gp4_gp2_rhoq = calloc(numl,sizeof(PRECISION));
 	gp5_gp2_rhou = calloc(numl,sizeof(PRECISION));
 	gp6_gp2_rhov = calloc(numl,sizeof(PRECISION));
-	
+
     gp1=calloc(numl,sizeof(PRECISION));
     gp2=calloc(numl,sizeof(PRECISION));
     gp3=calloc(numl,sizeof(PRECISION));
@@ -126,7 +129,7 @@ void ReservarMemoriaSinteisisDerivadas(int numl){
     dgp4=calloc(numl,sizeof(PRECISION));
     dgp5=calloc(numl,sizeof(PRECISION));
     dgp6=calloc(numl,sizeof(PRECISION));
-    d_dt=calloc(numl,sizeof(PRECISION));    
+    d_dt=calloc(numl,sizeof(PRECISION));
 
 	d_ei=calloc(numl*7,sizeof(PRECISION));
 	d_eq=calloc(numl*7,sizeof(PRECISION));
@@ -160,14 +163,14 @@ void ReservarMemoriaSinteisisDerivadas(int numl){
 	rhoq=calloc(numl,sizeof(PRECISION));
 	rhou=calloc(numl,sizeof(PRECISION));
 	rhov=calloc(numl,sizeof(PRECISION));
-	
+
 	parcial1=calloc(numl,sizeof(PRECISION));
 	parcial2=calloc(numl,sizeof(PRECISION));
 	parcial3=calloc(numl,sizeof(PRECISION));
 
     nubB=calloc(cuantic[0].N_SIG,sizeof(PRECISION));
     nurB=calloc(cuantic[0].N_SIG,sizeof(PRECISION));
-    nupB=calloc(cuantic[0].N_PI,sizeof(PRECISION));				
+    nupB=calloc(cuantic[0].N_PI,sizeof(PRECISION));
 
 	uuGlobalInicial=calloc((int)(cuantic[0].N_PI+cuantic[0].N_SIG*2),sizeof(PRECISION *));
 	uuGlobal=0;
@@ -222,7 +225,9 @@ void LiberarMemoriaSinteisisDerivadas(){
 	free(dshi);
 
 	free(spectra);
-	free(d_spectra);    
+	free(d_spectra);
+	free(spectra_tmp);
+	free(output);
 
 	free(fi_p);
 	free(fi_b);
@@ -264,7 +269,7 @@ void LiberarMemoriaSinteisisDerivadas(){
 	for(i=0;i<(int)(cuantic[0].N_PI+cuantic[0].N_SIG*2);i++){
 		free(uuGlobalInicial[i]);
 	}
-	
+
 	for(i=0;i<(int)(cuantic[0].N_PI+cuantic[0].N_SIG*2);i++){
 		free(HGlobalInicial[i]);
 	}

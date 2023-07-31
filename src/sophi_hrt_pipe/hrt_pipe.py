@@ -115,7 +115,7 @@ def phihrt_pipe(input_json_file):
     SPGYlib
 
     '''
-    version = 'V1.7.0 May 15th 2023'
+    version = 'V1.8.0 July 26th 2023'
 
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
     printc('PHI HRT data reduction software  ',bcolors.OKGREEN)
@@ -918,6 +918,59 @@ def phihrt_pipe(input_json_file):
     #take out of ifs, so that if both are true, they have the exact same time in the header
     ntime = datetime.datetime.now()
 
+    #-----------------
+    # WRITE OUT INTERMEDIATE [wl,pol,y,x]
+    #-----------------
+
+    if out_intermediate: 
+        #intermediate output with their own header, so they can be easily used as input for the pipeline
+        for count, scan in enumerate(data_f):
+            root_scan_name = scan_name_list[count]
+            hdr_arr[count]['DATE'] = ntime.strftime("%Y-%m-%dT%H:%M:%S")
+            hdr_interm = hdr_arr[count].copy()
+
+            if dark_c: 
+                history_str = f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {False}. Flat: {False}, Unsharp: {False}. Flat norm: {False}. I->QUV ctalk: {False}. PSF deconvolution: {False}"
+                file_suffix = 'dark_corrected'
+                tmp = data_darkc[:,:,:,:,count]
+                tmp = np.moveaxis(tmp, [-1,-2], [0,1])
+                write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, out_dir)
+            
+            if prefilter_c:
+                history_str =  f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {False}, Unsharp: {False}. Flat norm: {False}. I->QUV ctalk: {False}. PSF deconvolution: {False}"
+                file_suffix = 'prefilter_corrected'
+                tmp = data_PFc[:,:,:,:,count]
+                tmp = np.moveaxis(tmp, [-1,-2], [0,1])
+                write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, out_dir)
+
+            if flat_c: 
+                history_str = f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {False}. PSF deconvolution: {False}"
+                #with US
+                file_suffix =  'flat_corrected'
+                tmp = data_flatc[:,:,:,:,count]
+                tmp = np.moveaxis(tmp, [-1,-2], [0,1])
+                write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, out_dir)
+                #without US
+                # root_scan_name_before_US = f"copy_{flat_f.split('/')[-1]}"
+                # file_suffix = ''
+                # write_out_intermediate(flat_copy, hdr_interm, history_str, scan, root_scan_name_before_US, file_suffix, out_dir)
+
+            if demod:
+                history_str = f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {False}. PSF deconvolution: {False}"
+                file_suffix = 'demodulated'
+                tmp = data_demod_normed[:,:,:,:,count]
+                tmp = np.moveaxis(tmp, [-1,-2], [0,1])
+                write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, out_dir, bunit = 'I_CONT', btype = 'STOKES')
+
+    else:
+        print(" ")
+        printc('-->>>>>>> No intermediate files requested',color=bcolors.WARNING)
+
+    #-----------------
+    # WRITE OUT STOKES [wl,pol,y,x]
+    #-----------------
+
+
     if out_stokes_file:
         
         print(" ")
@@ -973,50 +1026,10 @@ def phihrt_pipe(input_json_file):
         printc('-->>>>>>> No output Stokes file mode',color=bcolors.WARNING)
 
     #-----------------
-    # WRITE OUT INTERMEDIATE
-    #-----------------
-
-    if out_intermediate: 
-        #intermediate output with their own header, so they can be easily used as input for the pipeline
-        for count, scan in enumerate(data_f):
-            root_scan_name = scan_name_list[count]
-            hdr_arr[count]['DATE'] = ntime.strftime("%Y-%m-%dT%H:%M:%S")
-            hdr_interm = hdr_arr[count].copy()
-
-            if dark_c: 
-                history_str = f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {False}. Flat: {False}, Unsharp: {False}. Flat norm: {False}. I->QUV ctalk: {False}. PSF deconvolution: {False}"
-                file_suffix = 'dark_corrected'
-                write_out_intermediate(data_darkc[:,:,:,:,count], hdr_interm, history_str, scan, root_scan_name, file_suffix, out_dir)
-            
-            if prefilter_c:
-                history_str =  f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {False}, Unsharp: {False}. Flat norm: {False}. I->QUV ctalk: {False}. PSF deconvolution: {False}"
-                file_suffix = 'prefilter_corrected'
-                write_out_intermediate(data_PFc[:,:,:,:,count], hdr_interm, history_str, scan, root_scan_name, file_suffix, out_dir)
-
-            if flat_c: 
-                history_str = f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {False}. PSF deconvolution: {False}"
-                #with US
-                file_suffix =  'flat_corrected'
-                write_out_intermediate(data_flatc[:,:,:,:,count], hdr_interm, history_str, scan, root_scan_name, file_suffix, out_dir)
-                #without US
-                # root_scan_name_before_US = f"copy_{flat_f.split('/')[-1]}"
-                # file_suffix = ''
-                # write_out_intermediate(flat_copy, hdr_interm, history_str, scan, root_scan_name_before_US, file_suffix, out_dir)
-
-            if demod:
-                history_str = f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {False}. PSF deconvolution: {False}"
-                file_suffix = 'demodulated'
-                write_out_intermediate(data_demod_normed[:,:,:,:,count], hdr_interm, history_str, scan, root_scan_name, file_suffix, out_dir, bunit = 'I_CONT', btype = 'STOKES')
-
-    else:
-        print(" ")
-        printc('-->>>>>>> No intermediate files requested',color=bcolors.WARNING)
-
-    #-----------------
     # INVERSION OF DATA WITH CMILOS
     #-----------------
 
-    if rte == 'RTE' or rte == 'CE' or rte == 'CE+RTE' or rte == 'RTE_seq':
+    if rte in {"RTE","CE","CE+RTE","RTE+PSF","CE+RTE+PSF"}:
         #check out_dir has "/" character
         if out_dir[-1] != "/":
             print("Desired Output directory missing / character, will be added")
@@ -1031,12 +1044,30 @@ def phihrt_pipe(input_json_file):
             data = np.mean(data, axis = (-1))
             data_shape = (data_size[0], data_size[1], 1)
 
-        if pymilos_opt:
-            #weight = np.asarray([1.,4.,5.4,4.1]); initial_model = np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85])
-            #py_cmilos(data_f, hdr_arr, wave_axis_arr, data_shape, cpos_arr, data, rte, mask, imgdirx_flipped, out_rte_filename, out_dir, weight = weight, initial_model = initial_model, vers = vrs)
-            py_cmilos(data_f, hdr_arr, wave_axis_arr, data_shape, cpos_arr, data, rte, mask, imgdirx_flipped, out_rte_filename, out_dir, cavity_f, vers = vrs)
-        else:
-            cmilos(data_f, hdr_arr, wave_axis_arr, data_shape, cpos_arr, data, rte, mask, imgdirx_flipped, out_rte_filename, out_dir, cavity_f, rows, cols, vers = vrs)
+        RTE_code = 'pymilos' # it will become an input in the json (DEFAULT: 'pymilos')
+        options = []
+        # weight = np.asarray([1.,4.,5.4,4.1]) # until RSW 6
+        # weight = np.asarray([1.,3.5,4.,3.5]) # OK without spectral PSF
+        weight = np.asarray([1.,3.8,4.1,3.6]) # with spectral PSF
+        
+        # initial_model = np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]) # until RSW 6
+        # initial_model = np.asarray([400,30,120,14.,0.06,0.05,.5,.25,.75]) # OK without spectral PSF
+        initial_model = np.asarray([400,30,120,1.,0.03,0.05,.01,.2,.8]) # with spectral PSF
+
+        generate_l2(data_f, hdr_arr, wave_axis_arr, cpos_arr, 
+                    data, RTE_code, rte, 
+                    mask, imgdirx_flipped, out_rte_filename, out_dir, 
+                    cavity_f, rows, cols, vers = vrs,
+                    options = options,
+                    weight = weight,
+                    initial_model = initial_model)
+                    
+        # if pymilos_opt:
+        #     #weight = np.asarray([1.,4.,5.4,4.1]); initial_model = np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85])
+        #     #py_cmilos(data_f, hdr_arr, wave_axis_arr, data_shape, cpos_arr, data, rte, mask, imgdirx_flipped, out_rte_filename, out_dir, weight = weight, initial_model = initial_model, vers = vrs)
+        #     py_cmilos(data_f, hdr_arr, wave_axis_arr, data_shape, cpos_arr, data, rte, mask, imgdirx_flipped, out_rte_filename, out_dir, cavity_f, vers = vrs)
+        # else:
+        #     cmilos(data_f, hdr_arr, wave_axis_arr, data_shape, cpos_arr, data, rte, mask, imgdirx_flipped, out_rte_filename, out_dir, cavity_f, rows, cols, vers = vrs)
 
     else:
         print(" ")

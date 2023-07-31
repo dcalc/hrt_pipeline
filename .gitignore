@@ -59,6 +59,7 @@ pymilos/pymilos.c
 pymilos/pymilos.cpython*
 pymilos/build/
 pymilos/build/*
+pymilos/lib/*.o
 pymilos/pymilos.egg-info/
 pymilos/pymilos.egg-info/*
 pymilos/.nfs*

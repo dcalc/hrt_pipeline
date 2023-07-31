@@ -204,8 +204,8 @@ def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = False, verbose = 
             printc('-->>>>>>> If FG temperature is not 61, the relation wl = wlref + V * tunning_constant is not valid anymore',color=bcolors.WARNING)
             printc('          Use instead: wl =  wlref + V * tunning_constant + temperature_constant_new*(Tfg-61)',color=bcolors.WARNING)
         temperature_constant_old = 40.323e-3 # old temperature constant, still used by Johann
-        temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
-        # wave_axis += temperature_constant_old*(Tfg-61)
+        # temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
+        temperature_constant_new = 36.46e-3 # value from HS# wave_axis += temperature_constant_old*(Tfg-61)
         wave_axis += temperature_constant_new*(Tfg-61) # 20221123 see cavity_maps.ipynb with example
         # voltagesData += np.round((temperature_constant_old-temperature_constant_new)*(Tfg-61)/tunning_constant,0)
 
@@ -406,9 +406,15 @@ def check_pmp_temp(hdr_arr):
     -------
     pmp_temp : str
     """
-    first_pmp_temp = hdr_arr[0]['HPMPTSP1']
+    first_pmp_temp = int(hdr_arr[0]['HPMPTSP1'])
     result = all(hdr['HPMPTSP1'] == first_pmp_temp for hdr in hdr_arr)
     if (result):
+        t0 = dt(2023,3,28,0,0,0)
+        t1 = dt(2023,3,30,0,0,0)
+        tobs = dt.fromisoformat(hdr_arr[0]['DATE-OBS'][:-4])
+        if (tobs > t0 and tobs < t1):
+            first_pmp_temp = 50
+            printc('WARNING: Data acquired on 2023-03-28 and 2023-03-29 have a PMP temperature setting to 40 deg, but the PMP are fluctuating at ~45 deg \nException to HRT pipeline to use the 50 deg demodulation matrix.',color=bcolors.WARNING)
         print(f"All the scan(s) have the same PMP Temperature Set Point: {first_pmp_temp}")
         pmp_temp = str(first_pmp_temp)
         return pmp_temp
@@ -1345,7 +1351,7 @@ def blos_noise(blos_file, iter=True, fs = None):
     if iter:
         ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
         try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,10.],eps=1e-4); p_iter[0] = pp[0]
+            p_iter, hi_iter = iter_noise(values,[1.,0.,10.],eps=1e-4); p_iter[0] = p[0]
             ax[1].plot(xx,gaus(xx,*p_iter),'g--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
             # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
         except:
@@ -1448,7 +1454,7 @@ def stokes_noise(stokes_file, iter=True):
     if iter:
         ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
         try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = pp[0]
+            p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = p[0]
             ax[1].plot(xx,gaus(xx,*p_iter),'g--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
             # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
         except:
@@ -2068,7 +2074,7 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
         return ht['CROTA'], ht['CRPIX1'] - start_col, ht['CRPIX2'] - start_row, ht['CRVAL1'], ht['CRVAL2'], t0, match
 ###############################################
 
-def cavity_shifts(cavity_f, wave_axis,rows,cols):
+def cavity_shifts(cavity_f, wave_axis,rows,cols,returnWL = True):
     """applies cavity shifts to the wave axis for use in RTE
 
     Parameters
@@ -2095,8 +2101,29 @@ def cavity_shifts(cavity_f, wave_axis,rows,cols):
      
     new_wave_axis = wave_axis[np.newaxis,np.newaxis] - cavityWave[...,np.newaxis]
 
+    if returnWL:
+        return new_wave_axis
+    else:
+        return cavityWave
 
-    return new_wave_axis
+def load_l2_stk(directory,did,version=None):
+    import glob
+    file_n = os.listdir(directory)
+    key = 'stokes'
+    if version is None:
+        version = '*'
+    datfile = glob.glob(os.path.join(directory, f'solo_L2_phi-hrt-{key}_*_{version}_{did}.fits.gz'))
+    if not(datfile):
+        print('No data found')
+        return np.empty([]), np.empty([])
+    else:
+        if len(datfile) == 1:
+            return fits.getdata(datfile[0],header=True)
+        else:
+            print('More than one file found:')
+            print(datfile)
+            print('Please specify the Version')
+            return np.empty([]), np.empty([])
 
 def load_l2_rte(directory,did,version=None):
     file_n = os.listdir(directory)
@@ -2329,7 +2356,7 @@ def phi_disambig(bazi,bamb,method=2):
     
     return disbazi
 
-def dataset_colorbar(ax,im,location="top",label=None):
+def dataset_colorbar(ax,im,location="top",label=None,xy=None,fontsize=9):
     from mpl_toolkits.axes_grid1 import make_axes_locatable
 
     divider = make_axes_locatable(ax)
@@ -2338,13 +2365,14 @@ def dataset_colorbar(ax,im,location="top",label=None):
         orientation = 'horizontal'
     else:
         orientation = 'vertical'
-    
-    cb = plt.colorbar(im, orientation=orientation, cax=cax)
-#     cax.set_title(r'km$^2$/s$^2$/Hz',fontsize=9); #cax.yaxis.set_label_position("right")
-    if label is not None:
-        cax.set_title(label,fontsize=9,x=-.1,y=-1); #cax.yaxis.set_label_position("right")
+    if xy is None:
+        cb = plt.colorbar(im, orientation=orientation, cax=cax, label=label)
+    else:
+        cb = plt.colorbar(im, orientation=orientation, cax=cax)
+        cax.set_title(label,fontsize=fontsize,x=xy[0],y=xy[1])
+        
     if location == 'top' or location == 'bottom':
-        cax.xaxis.set_ticks_position(location)
+        cax.xaxis.set_ticks_position(location)    
     else:
         cax.yaxis.set_ticks_position(location)
     
@@ -2441,6 +2469,8 @@ def plot_l2_pdf(path,did,version=None):
     # plt.rcParams['figure.dpi'] = 300
     plt.rcParams['xtick.direction'] = 'in'
     plt.rcParams['ytick.direction'] = 'in'
+    plt.rcParams['image.cmap'] = 'gist_heat'
+
     import sunpy.visualization.colormaps
     import cmasher as cmr
 

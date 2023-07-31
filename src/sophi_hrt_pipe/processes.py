@@ -141,7 +141,7 @@ def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, hea
 
     flat = compare_cpos(flat,cpos_f,cpos_arr[0]) 
 
-    flat_pmp_temp = str(header_flat['HPMPTSP1'])
+    flat_pmp_temp = str(int(header_flat['HPMPTSP1']))
 
     print(f"Flat PMP Temperature Set Point: {flat_pmp_temp}")
 
@@ -287,7 +287,7 @@ def normalise_flat(flat, ceny, cenx) -> np.ndarray:
         printc("ERROR, Unable to normalise the flat field", color=bcolors.FAIL)
 
 
-def demod_hrt(data, pmp_temp, verbose = True) -> np.ndarray:
+def demod_hrt(data, pmp_temp, verbose = True, modulate = False) -> np.ndarray:
     """Use constant demodulation matrices to demodulate input data
 
     Parameters
@@ -350,6 +350,8 @@ def demod_hrt(data, pmp_temp, verbose = True) -> np.ndarray:
     if verbose:
         printc(f'Using a constant demodulation matrix for a PMP TEMP of {pmp_temp} deg, rotated by {HRT_MOD_ROTATION_ANGLE} deg',color = bcolors.OKGREEN)
     
+    if modulate and verbose:
+        demod_data = mod_matrix
     demod_data = demod_data.reshape((4,4))
     shape = data.shape
     demod = np.tile(demod_data, (shape[0],shape[1],1,1))
@@ -580,7 +582,8 @@ def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None,
                                         1844.   ])
     if TemperatureCorrection:
         temperature_constant_old = 40.323e-3 # old temperature constant, still used by Johann
-        temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
+        # temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
+        temperature_constant_new = 36.46e-3 # value from HS
         Tfg = 66 # FG was at 66 deg during e2e calibration
         tunning_constant = 0.0003513 # this shouldn't change
         
@@ -1344,8 +1347,8 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         prefilter = prefilter[:,::-1]
     
         tunning_constant = 0.0003513 # this shouldn't change
-        temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
-        ref_wavelength = 6173.341 # this shouldn't change
+        # temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
+        temperature_constant_new = 36.46e-3 # value from HSref_wavelength = 6173.341 # this shouldn't change
         Tfg = h['FGH_TSP1']
         Volt = fits.open(data_f)[3].data['PHI_FG_voltage'][0]
         if TemperatureCorrection:

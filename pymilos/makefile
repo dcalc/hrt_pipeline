@@ -1,4 +1,5 @@
 LIB_DIR = lib
+# CXXFLAGS="-mmacosx-version-min=10.10"
 
 default: pymilos
 
