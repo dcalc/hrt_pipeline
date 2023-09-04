@@ -76,7 +76,7 @@ def data_hdr_kw(hdr, data):
     return hdr
 
 
-def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, header_imgdirx_exists, imgdirx_flipped, cpos_arr) -> np.ndarray:
+def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, header_imgdirx_exists, imgdirx_flipped, cpos_arr,pmp_temp) -> np.ndarray:
     """Load, properly scale, flip in X if needed, and make any necessary corrections for particular flat fields
 
     Parameters
@@ -144,6 +144,14 @@ def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, hea
     flat_pmp_temp = str(int(header_flat['HPMPTSP1']))
 
     print(f"Flat PMP Temperature Set Point: {flat_pmp_temp}")
+
+    if flat_pmp_temp != pmp_temp:
+        printc('-->>>>>>> WARNING: Flat and dataset have different PMP temperatures',color=bcolors.WARNING)
+        printc('                   Flat will be demodulated and then modulated back to the dataset PMP temperature',color=bcolors.WARNING)
+        
+        flat, _ = demod_hrt(flat,flat_pmp_temp)
+        flat, _ = demod_hrt(flat,pmp_temp,modulate=True)
+        flat_pmp_temp = pmp_temp
 
     #--------
     # correct for missing line in particular flat field
@@ -352,22 +360,26 @@ def demod_hrt(data, pmp_temp, verbose = True, modulate = False) -> np.ndarray:
     
     if modulate and verbose:
         demod_data = mod_matrix
-    demod_data = demod_data.reshape((4,4))
-    shape = data.shape
-    demod = np.tile(demod_data, (shape[0],shape[1],1,1))
+
+    
+    # demod_data = demod_data.reshape((4,4))
+    # shape = data.shape
+    # demod = np.tile(demod_data, (shape[0],shape[1],1,1))
 
     if data.ndim == 5:
-        # if data array has more than one scan
-        data = np.moveaxis(data,-1,0) #moving number of scans to first dimension
+        data = np.einsum('ij,abjcs->abics', demod_data, data)
+        # # if data array has more than one scan
+        # data = np.moveaxis(data,-1,0) #moving number of scans to first dimension
 
-        data = np.matmul(demod,data)
-        data = np.moveaxis(data,0,-1) #move scans back to the end
+        # data = np.matmul(demod,data)
+        # data = np.moveaxis(data,0,-1) #move scans back to the end
     
     elif data.ndim == 4:
-        # if data has one scan
-        data = np.matmul(demod,data)
+        data = np.einsum('ij,abjc->abic', demod_data, data)
+        # # if data has one scan
+        # data = np.matmul(demod,data)
     
-    return data, demod
+    return data, demod_data
 
 
 def unsharp_masking(flat,sigma,flat_pmp_temp,cpos_arr,clean_mode,clean_f,pol_end=4,verbose=True):
@@ -384,7 +396,7 @@ def unsharp_masking(flat,sigma,flat_pmp_temp,cpos_arr,clean_mode,clean_f,pol_end
     cpos_arr: ndarray
         array of continuum positions
     clean_mode: str
-        options are 'QUV', 'UV', 'V'
+        options are any combination of 'IQUV'
     clean_f: str
         options are 'blurring' or 'fft'
     pol_end: int
@@ -411,20 +423,18 @@ def unsharp_masking(flat,sigma,flat_pmp_temp,cpos_arr,clean_mode,clean_f,pol_end
     elif cpos_arr[0] == 5:
         wv_range = range(5)
 
-    if clean_mode == "QUV":
-        start_clean_pol = 1
-        if verbose:
-            print("Unsharp Masking Q,U,V")
-        
-    elif clean_mode == "UV":
-        start_clean_pol = 2
-        if verbose:
-            print("Unsharp Masking U,V")
-        
-    elif clean_mode == "V":
-        start_clean_pol = 3
-        if verbose:
-            print("Unsharp Masking V")
+    clean_pol = []
+    if "I" in clean_mode:
+        clean_pol += [0]
+    if "Q" in clean_mode:
+        clean_pol += [1]
+    if "U" in clean_mode:
+        clean_pol += [2]
+    if "V" in clean_mode:
+        clean_pol += [3]
+    
+    print("Unsharp Masking",clean_mode)
+
         
     if clean_f == 'blurring':
         blur = lambda a: gaussian_filter(a,sigma)
@@ -433,7 +443,7 @@ def unsharp_masking(flat,sigma,flat_pmp_temp,cpos_arr,clean_mode,clean_f,pol_end
         fftgaus2d = np.exp(-2*np.pi**2*(x-0)**2*sigma**2)[:,np.newaxis] * np.exp(-2*np.pi**2*(x-0)**2*sigma**2)[np.newaxis]
         blur = lambda a : (np.fft.ifftn(fftgaus2d*np.fft.fftn(a.copy()))).real
     
-    for pol in range(start_clean_pol,pol_end):
+    for pol in clean_pol:
 
         for wv in wv_range: #not the continuum
 
@@ -443,10 +453,8 @@ def unsharp_masking(flat,sigma,flat_pmp_temp,cpos_arr,clean_mode,clean_f,pol_end
 
             new_demod_flats[:,:,pol,wv] = c
 
-    invM = np.linalg.inv(demodM)
-
-    flat_cleaned = np.matmul(invM, new_demod_flats*norm_factor)
-
+    flat_cleaned, _ = demod_hrt(new_demod_flats*norm_factor,flat_pmp_temp,verbose,modulate=True)
+    
     return flat_cleaned
 
 
@@ -534,6 +542,50 @@ def flat_correction(data,flat,flat_states,cpos_arr,flat_pmp_temp=50,rows=slice(0
         printc(exc,color=bcolors.FAIL) 
         printc("ERROR, Unable to apply flat fields",color=bcolors.FAIL)
 
+
+def prefilter_correctionNew(data,wave_axis_arr,rows,cols,imgdirx_flipped = 'YES'):
+    """
+    New prefilter correction based on JH email on 2023-08-17
+    Based on on-ground measurements at Meudon
+
+    Parameters
+    ----------
+    data: ndarray
+        input data
+    wave_axis_arr: ndarray
+        array containing wavelengths
+    rows: slice
+        rows to be considered because of data cropping
+    cols: slice
+        columns to be considered because of data cropping
+    imgdirx_flipped: str
+        check if data have been flipped (all the hrt-L1 data are flipped), DEFAULT = 'YES'
+
+    Returns
+    -------
+    data: ndarray
+        prefilter corrected data
+    """
+    X,Y = np.meshgrid(np.arange(cols.start,cols.stop),np.arange(rows.start,rows.stop))
+    r = np.sqrt((X-934)**2 + (Y-1148)**2)
+
+    CWL = -0.332253 - 4.81875e-05*r - 3.24533e-07*r**2 #  in AA, 0 is the line core of the Fe617 line (6173.343 AA)
+    FWHM = 2.59385 - 1.28984e-06*r - 7.38763e-09*r**2 # in AA
+    EXP = 3.65789 - 5.76046e-05*r - 3.52776e-08*r**2
+
+    xx = lambda wl: np.abs((wl[:,np.newaxis,np.newaxis]-CWL)*2/FWHM)  # in AA, lambda=0 is the Fe line core
+    profile = lambda wl:  1/(1+xx(wl)**(2*EXP)) # max. transmission set to be 1. everywhere
+
+    wlref = 6173.341
+
+    for scan in range(data.shape[-1]):
+        prefilter = profile(wave_axis_arr[scan]-wlref) # [wl,y,x]
+        prefilter = np.moveaxis(prefilter[...,np.newaxis],0,-1) # [y,x,1,wl]
+        if imgdirx_flipped == 'YES':
+            printc('Flipping prefilter on the Y axis')
+            prefilter = prefilter[:,::-1]
+        data[...,scan] /= prefilter
+    return data
 
 def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None, TemperatureCorrection=False):
     """Apply prefilter correction to input data
@@ -723,6 +775,507 @@ def load_ghost_field_stop(header_imgdirx_exists, imgdirx_flipped) -> np.ndarray:
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
     return field_stop_ghost
 
+
+def crosstalk_2D_ItoQUV(data: np.ndarray,
+                     verbose: bool = False,
+                     mask: np.ndarray = np.empty([], dtype=float),
+                     threshold: float = 0.5,
+                     lower_threshold: float = 40.0,
+                     norma: float = 1.0,
+                     mode: str = 'standard',
+                     divisions: int = 16,
+                     ind_wave: bool = False,
+                     continuum_pos: int = 0,
+                     VtoQU: bool = False):
+    """
+    crosstalk_ItoQUV calculates the cross-talk from Stokes $I$ to Stokes $Q$, $U$, and $V$.
+
+    The procedure works as follow: (see Sanchez Almeida, J. \& Lites, B.~W.\ 1992, \apj, 398, 359. doi:10.1086/171861)
+
+
+    :param input_data: input data. Dimensions should be `[Stokes, wavelength, ydim,xdim]`
+    :type input_data: np.ndarray
+    :param verbose: activate verbosity, defaults to False
+    :type verbose: bool, optional
+    :param mask: mask for selecting the image area for cross-talk correction dimension = `[ydim,xdim]´, defaults to 0
+    :type mask: np.ndarray, optional
+    :param threshold: threshold for considering signals in the cross-talk calculation. :math:`p = \sqrt(Q^2 + U^2 = V^2) < threshold`. Given in percent, defaults to 0.5 %
+    :type threshold: float, optional
+    :param lower_threshold: lower threshold for considering signals in the cross-talk calculation. :math:`I(\\lambda) > lower_threshold`. Given in percent, defaults to 40 %
+    :type lower_threshold: float, optional
+    :param norma: Data normalization value, defaults to 1.0
+    :type norma: float, optional
+    :param mode: crosstalk mode, defaults to 'standard'
+
+        there are two different modes for calculating the cross-talk.
+
+        1. ´mode = 'standard'´. It is done using the whole Sun, i.e., one cross-talk coefficient for the full image
+        2. ´mode = 'surface'´. In this case, the Sun is divided in different squares (`N = divisions`) along the two dimensions and the crosstalk is calculated for each of the squares.
+           Then, a surface is fit to the :math:`N**2` coefficients and applied to the data. In this case, lower_trheshold is ignored and if a mask is not privided, the code generated a mask coinciding with the solar disk.
+        2. ´mode = 'jaeggli'´. In this case, the cross talk correction follows the work by Jaeggli et al., 2022, \apj, https://doi.org/10.3847/1538-4357/ac6506
+            The goal is to determine the diattenuator and retarder Mueller matrices that minimize certain criteria based on physical assumptions about the polarized signals from the Sun. The application of the combination of this matrices gives the recovered Stokes vector.
+
+    :type mode: str, optional
+    :param divisions: number of square divisions alon gone axis for `surface`mode. defaults to 6.0
+    :type divisions: int, optional
+    :param cntr_rad: Center and radius of the solar disk `[cx,cy,rad]`. Needed for `mode='surface'`. defaults to []
+    :type cntr_rad: list, optional
+    :param ind_wave: Use just the continuum wavelength for the crosstalk or the whole line. defaults to False
+    :type ind_wave: bool, optional
+    :param continuum_pos: If ind_wave, this keyword is mandatory and contains the position of the continuum. defaults to 0.
+    :type continuum_pos: int, optional
+    :param VtoQU: If True, it applies the retarder matrix when 'jaeggli' method is performed. defaults to False
+    :type VtoQU: bool, optional
+    :return: cross-talk parameters
+    :rtype: List of np.ndarray
+    """
+
+    from scipy.optimize import minimize
+
+    def __fit_crosstalk(input,masked,axis = 2,full_verbose = False):
+        # multiply the data by the mask and flatten everything. Flatenning makes things easier
+        xI = (input.take(0,axis=axis) * masked).flatten() #Stokes I
+        yQ = (input.take(1,axis=axis) * masked).flatten() #Stokes Q
+        yU = (input.take(2,axis=axis) * masked).flatten() #Stokes U
+        yV = (input.take(3,axis=axis) * masked).flatten() #Stokes V
+        
+        # check two conditions:
+        # 1) mask should be > 0 and intensity above lower_threshold
+
+        if mask_set:
+            idx = (xI != 0)
+        else:
+            idx = (xI != 0) & (xI > (lower_threshold/100. * norma))
+
+        xI = xI[idx]
+        yQ = yQ[idx]
+        yU = yU[idx]
+        yV = yV[idx]
+        
+        # 2) Stokes Q,U, and V has to be below a limit (for not inclusing polarization signals)
+
+        yP = np.sqrt(yQ**2 + yU**2 + yV**2)
+        idx = yP < (threshold/100. * norma)
+        # plt.figure(); plt.hist(yP,100); plt.axvline((threshold/100. * norma),color='r'); plt.show()
+        xI = xI[idx]
+        yQ = yQ[idx]
+        yU = yU[idx]
+        yV = yV[idx]
+        
+        # Now we perform a cross-talk fit.
+
+        cQ = np.polyfit(xI, yQ, 1)
+        cU = np.polyfit(xI, yU, 1)
+        cV = np.polyfit(xI, yV, 1)
+
+        if full_verbose:
+            st = 0
+            w = 5
+            plt.imshow(masked)
+            plt.show()
+            plt.imshow(input[w,st,:,:])
+            plt.show()
+
+            xp = np.linspace(xI.min(), xI.max(), 100)
+            ynew = np.polyval(cQ, xp)
+            plt.plot(xI,yQ,'.')
+            plt.plot(xp,ynew,'o')
+            plt.show()
+            ynew = np.polyval(cU, xp)
+            plt.plot(xI,yU,'.')
+            plt.plot(xp,ynew,'o')
+            plt.show()
+            ynew = np.polyval(cV, xp)
+            plt.plot(xI,yV,'.')
+            plt.plot(xp,ynew,'o')
+            plt.show()
+
+        return cQ, cU, cV
+
+    def __generate_squares(radius,divisions: int = 6):
+        square_centers = np.linspace(-radius,radius,divisions+1,endpoint=True)[1:] - radius / divisions
+        X,Y = np.meshgrid(square_centers, square_centers)
+        return np.vstack([X.ravel(), Y.ravel()])
+
+    def __fit_plane(data, mask=None):
+
+        """
+        Fit 2D plane to data. Will be replazed by a global one (comming from had-hoc branch) at some point.
+        """
+        yd, xd = data.shape
+        x = np.arange(xd)
+        y = np.arange(yd)
+        X, Y = np.meshgrid(x, y)
+        
+        if mask is not None:
+            X_masked = X[mask]
+            Y_masked = Y[mask]
+            Z_masked = data[mask]
+        else:
+            X_masked = X
+            Y_masked = Y
+            Z_masked = data
+
+        A = np.vstack([X_masked.flatten(), Y_masked.flatten(), np.full(X_masked.size,1)]).T
+        a, b, c = np.linalg.lstsq(A, Z_masked.flatten(), rcond=None)[0]
+        P = a * X + b * Y + c
+
+        return (P, a, b, c)
+
+
+    if data.ndim == 3:
+        # no wavelength has been provided
+        data = data[...,np.newaxis]
+
+    if data.ndim != 4:
+        printc('Input data shall have 3 or 4 dimensions but it is of ',data.ndim,' dimensions',color=bcolors.FAIL)
+        ValueError("Check dimensions of input data into crosstalk_ItoQUV")
+
+    yd,xd,sd,wd = data.shape
+
+    wave_index = np.arange(wd,dtype=int)
+    printc('                     wave_range:',wave_index, color=bcolors.OKBLUE )
+
+    if ind_wave:
+        wave_index[:] = continuum_pos
+        printc('          Computing the cross-talk using just the continuum....', color=bcolors.OKBLUE)
+        printc('                     wave_range has change to:',wave_index, color=bcolors.OKBLUE )
+
+    # First check also if mask has been provided. If np.array in empty with dim (), shape is False.
+    if mask.shape:
+        printc('mask inside `crosstalk_ItoQUV`, has been provided',color=bcolors.OKGREEN)
+        if mask.ndim != 2:
+            printc('Input mask shall have 2 dimensions but it is of ',mask.ndim,' dimensions',color=bcolors.FAIL)
+            ValueError("Check dimensions of input mask into crosstalk_ItoQUV")
+        mask_set = True
+    else:
+        mask = np.zeros((yd,xd),dtype=bool)
+        mask[int(yd//2-yd//4):int(yd//2+yd//4),int(xd//2-xd//4):int(xd//2+xd//4)]
+
+    # threshold = 0.5
+    # lower_threshold = 40.
+    # norma = 1.
+
+    if mode == 'standard':
+
+        cQ, cU, cV = __fit_crosstalk(data[:,:,:,wave_index],mask[...,np.newaxis],full_verbose=verbose)
+
+        print('Cross-talk from I to Q: slope = {: {width}.{prec}f} ; off-set = {: {width}.{prec}f} '.format(cQ[0], cQ[1],width=8,prec=4))
+        print('Cross-talk from I to U: slope = {: {width}.{prec}f} ; off-set = {: {width}.{prec}f} '.format(cU[0], cU[1],width=8,prec=4))
+        print('Cross-talk from I to V: slope = {: {width}.{prec}f} ; off-set = {: {width}.{prec}f} '.format(cV[0], cV[1],width=8,prec=4))
+
+        # corrects the data:
+        corrected_data = np.copy(data)
+        
+        corrected_data[:, :, 1] = data[:, :, 1] - cU[0] * data[:, :, 0] - cU[1]
+        corrected_data[:, :, 2] = data[:, :, 2] - cQ[0] * data[:, :, 0] - cQ[1]
+        corrected_data[:, :, 3] = data[:, :, 3] - cV[0] * data[:, :, 0] - cV[1]
+        
+        return cQ, cU, cV, 0 , 0 , 0, corrected_data
+
+    elif mode == 'surface':
+        sz = data.shape # y,x,p,l
+        rad = sz[0]//2
+        size2 = rad//divisions
+        area = (size2*2)**2
+        ndiv = __generate_squares(rad,divisions)
+        cx = rad; cy = rad
+
+        if verbose:
+            fig, ax = plt.subplots(figsize=(8,8))
+            ax.imshow(data[:,:,0,0],cmap='gray_r')
+
+            for i in range(divisions**2):
+                square = plt.Rectangle((ndiv[0,i] + cx - size2,ndiv[1,i] + cy - size2), size2 * 2, size2 * 2 , color='r', fill=False)
+                ax.add_patch(square)
+            plt.show()
+
+        cQ = np.zeros((2,divisions**2))
+        cU = np.zeros((2,divisions**2))
+        cV = np.zeros((2,divisions**2))
+        
+        for i,loop in enumerate(range(divisions**2)):
+            from_x, to_x = np.round(ndiv[0,i] + cx - size2).astype(int) , np.round(ndiv[0,i] + cx + size2).astype(int)
+            from_y, to_y = np.round(ndiv[1,i] + cy - size2).astype(int) , np.round(ndiv[1,i] + cy + size2).astype(int)
+            if np.sum(mask[from_y:to_y,from_x:to_x])  > area * 0.1:
+                cQ[:,loop], cU[:,loop], cV[:,loop]  = \
+                    __fit_crosstalk(data[from_y:to_y,from_x:to_x,:,wave_index],mask[from_y:to_y,from_x:to_x,np.newaxis],full_verbose=verbose)
+        cQQ = np.reshape(cQ,(2,divisions,divisions))
+        cUU = np.reshape(cU,(2,divisions,divisions))
+        cVV = np.reshape(cV,(2,divisions,divisions))
+
+        if verbose:
+            plt.figure()
+            plt.imshow(cQQ[0,:,:]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(cUU[0,:,:]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(cVV[0,:,:]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(cQQ[1,:,:]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(cUU[1,:,:]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(cVV[1,:,:]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+        
+        dummy_s = np.zeros((yd,xd))
+        dummy_c = np.zeros((yd,xd))
+        for i,loop in enumerate(range(divisions**2)):
+            dummy_s[np.round(ndiv[1,i] + cy).astype(int),np.round(ndiv[0,i] + cx).astype(int)] = cQ[0,loop]
+            dummy_c[np.round(ndiv[1,i] + cy).astype(int),np.round(ndiv[0,i] + cx).astype(int)] = cQ[1,loop]
+        sfitQ = (__fit_plane(dummy_s, mask = (dummy_s != 0)) , __fit_plane(dummy_c, mask = (dummy_c != 0)) )
+        if verbose:
+            plt.figure()
+            plt.imshow(sfitQ[0][0]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(sfitQ[1][0]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+        
+        for i,loop in enumerate(range(divisions**2)):
+            dummy_s[np.round(ndiv[1,i] + cy).astype(int),np.round(ndiv[0,i] + cx).astype(int)] = cU[0,loop]
+            dummy_c[np.round(ndiv[1,i] + cy).astype(int),np.round(ndiv[0,i] + cx).astype(int)] = cU[1,loop]
+        sfitU = (__fit_plane(dummy_s, mask = (dummy_s != 0)) , __fit_plane(dummy_c, mask = (dummy_c != 0)) )
+        if verbose:
+            plt.figure()
+            plt.imshow(sfitU[0][0]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(sfitU[1][0]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+        
+        for i,loop in enumerate(range(divisions**2)):
+            dummy_s[np.round(ndiv[1,i] + cy).astype(int),np.round(ndiv[0,i] + cx).astype(int)] = cV[0,loop]
+            dummy_c[np.round(ndiv[1,i] + cy).astype(int),np.round(ndiv[0,i] + cx).astype(int)] = cV[1,loop]
+        sfitV = (__fit_plane(dummy_s, mask = (dummy_s != 0)) , __fit_plane(dummy_c, mask = (dummy_c != 0)) )
+        if verbose:
+            plt.figure()
+            plt.imshow(sfitV[0][0]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(sfitV[1][0]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+        
+        # correction
+        corrected_data = np.copy(data)
+        corrected_data[:, :, 1] = data[:, :, 1] - sfitQ[0][0][...,np.newaxis] * data[:, :, 0] - sfitQ[1][0][...,np.newaxis]
+        corrected_data[:, :, 2] = data[:, :, 2] - sfitU[0][0][...,np.newaxis] * data[:, :, 0] - sfitU[1][0][...,np.newaxis]
+        corrected_data[:, :, 3] = data[:, :, 3] - sfitV[0][0][...,np.newaxis] * data[:, :, 0] - sfitV[1][0][...,np.newaxis]
+
+        return cQ, cU, cV, sfitQ, sfitU, sfitV, corrected_data
+    
+    elif mode == 'jaeggli':
+        def _polmodel1(D,theta,chi):
+            dH = D*np.cos(chi)*np.sin(theta)
+            d45 = D*np.sin(chi)*np.sin(theta)
+            dR = D*np.cos(theta)
+            A = np.sqrt(1. - dH**2 - d45**2 - dR**2)
+
+            mat1 = np.array([
+                [ 1., dH, d45, dR], 
+                [ dH,  A,  0., 0.], 
+                [d45, 0.,   A, 0.],
+                [ dR, 0.,  0.,  A]], dtype='double')
+
+            mat2 = np.array([
+                [0.,     0.,     0.,     0.],
+                [0.,  dH**2, d45*dH,  dH*dR],
+                [0., d45*dH, d45**2, d45*dR],
+                [0.,  dH*dR, d45*dR,  dR**2]], dtype='double')
+
+            return( mat1 + (1-A)/D**2*mat2 )
+
+        def _fitfunc1(param, stokesin):
+            D = param[0]
+            theta = param[1]
+            chi = param[2]
+
+            # Keep diattenuation value in range
+            if D>=1:
+                D=0.999999
+
+            if D<=-1:
+                D = -0.999999
+
+            MM = _polmodel1(D, theta, chi)
+            iMM = np.linalg.inv(MM)
+
+            out = _minimize_for_model1(iMM,stokesin)
+
+            return(out)
+
+        def _minimize_for_model1(iMM,bs):
+            # apply a mueller matrix (rotation) to a 2D stokes vector (slit_Y,wavelength_X,4)
+            new_stokes = np.einsum('ij,abj->abi',iMM, np.squeeze(bs))
+
+            # Minimization criteria
+            out = np.abs(np.sum(new_stokes[:,:,0]*new_stokes[:,:,3],axis=1)) + \
+                np.abs(np.sum(new_stokes[:,:,0]*new_stokes[:,:,2],axis=1)) + \
+                np.abs(np.sum(new_stokes[:,:,0]*new_stokes[:,:,1],axis=1))
+
+            # sum over spatial positions
+            out = np.sum(out)
+
+            return(out)
+
+
+        # Functions for the retarder modeling
+        def _polmodel2(theta, delta):
+            St = np.sin(theta)
+            Ct = np.cos(theta)
+            Sd = np.sin(delta)
+            Cd = np.cos(delta)
+
+            MM1 = np.array([
+                [1.,  0., 0., 0.],
+                [0.,  Ct, St, 0.],
+                [0., -St, Ct, 0.],
+                [0.,  0., 0., 1.]
+            ], dtype='double')
+
+            MM2 = np.array([
+                [1., 0.,  0., 0.],
+                [0., 1.,  0., 0.],
+                [0., 0.,  Cd, Sd],
+                [0., 0., -Sd, Cd]
+            ], dtype='double')
+
+            MM = np.einsum('ij,jk', MM1, MM2)
+            return(MM)
+
+        def _fitfunc2(fitangles, stokesin):
+            theta = fitangles[0]
+            delta = fitangles[1]
+
+            MM = _polmodel2(theta, delta)
+            iMM = np.linalg.inv(MM)
+
+            out = _minimize_for_model2(iMM, stokesin)
+
+            return(out)
+
+        def _minimize_for_model2(iMM,bs):
+            new_stokes = np.einsum('ij,abj->abi',iMM, np.squeeze(bs))
+
+            # Minimization criteria
+            out = np.sum(new_stokes[:,:,3],axis=1)**2 +\
+                np.abs(np.sum(new_stokes[:,:,3]*new_stokes[:,:,2],axis=1)) +\
+                np.abs(np.sum(new_stokes[:,:,3]*new_stokes[:,:,1],axis=1))
+
+            # sum over spatial positions
+            out = np.sum(out)
+
+            return(out)
+
+        
+        # Make the continuum intensity map
+        imap = data[:,:,0,continuum_pos]
+        imap = imap.transpose()
+        
+        line_wv = [i for i in range(wd)]
+        line_wv.remove(continuum_pos)
+        
+        # Make the polarization fraction map
+        pmap = np.max( np.sqrt(np.sum(data[:,:,1:,line_wv]**2, axis=2))/np.mean(data[mask>0,0],axis=0)[line_wv], axis=2)
+        pmap = pmap.transpose()
+
+        # Apply thresholds to define different regions
+        ithresh = (lower_threshold/100. * norma) # 0.5 # continuum intensity threshold for the sunspot umbra
+        pthreshlow = (threshold/100. * norma) # polarization threshold for weak/strong polarization regions 
+        pthreshhigh = (threshold/100. * norma * 4) # polarization threshold for weak/strong polarization regions 
+
+        isumbra = np.argwhere(np.logical_and(imap < ithresh, mask > 0))
+        uyidx = isumbra[:,0]
+        uxidx = isumbra[:,1]
+
+        ispolar = np.argwhere(np.logical_and(pmap > pthreshhigh, mask > 0))
+        pyidx = ispolar[:,0]
+        pxidx = ispolar[:,1]
+
+        notpolar = np.argwhere(np.logical_and(pmap < pthreshlow, mask > 0))
+        nyidx = notpolar[:,0]
+        nxidx = notpolar[:,1]
+        
+        # Choose initial guess parameters for the diattenuation minimization
+        D = 0.5
+        theta = 0.
+        chi = 0.
+        initial_guess = (D, theta, chi)
+
+        # Use just the region with weak polarization
+        baddata = np.moveaxis(data[nxidx,nyidx,:][:,:,wave_index],1,2) #do selection for only strong polarization signals
+        result = minimize(_fitfunc1, initial_guess, args=baddata)
+
+        # Apply correction for I<->QUV cross-talk
+        printc('Fitting Diattenuation Matrix',color=bcolors.OKGREEN)
+        MM1a = _polmodel1(result.x[0],result.x[1], result.x[2])
+        iMM1a = np.linalg.inv(MM1a)
+        data1a =  np.einsum('ij,abjc->abic', iMM1a, data)
+
+        # Destreaking correction to data might happen here
+
+        # Choose an initial guess of those cross-talk parameters for the minimization algorithm
+        theta = 0.*np.pi/180.
+        delta = 0.*np.pi/180.
+        initial_guess = (theta,delta)
+
+        # Find the elliptical retardance parameters that minimize V*Q, V*U, and V*V
+        if VtoQU:
+            printc('Fitting Retardance Matrix',color=bcolors.OKGREEN)
+            baddata = np.moveaxis(data1a[pxidx, pyidx,:][:,:,wave_index],1,2)
+            result = minimize(_fitfunc2, initial_guess, args=baddata)
+
+            # Apply correction for QU<->V cross-talk
+            MM2a = _polmodel2(result.x[0],result.x[1])
+            iMM2a = np.linalg.inv(MM2a)
+            data2a =  np.einsum('ij,abjc->abic', iMM2a, data1a)
+            
+            # rotate back the Stokes Q and U signals (TBD)
+            # Apply final sign correction to match original spectra
+            theta = result.x[0]
+            MM3a = np.array( [[1., 0.             , 0.             , 0.],
+                               [0., np.cos(-theta) , np.sin(-theta) , 0.],
+                               [0., -np.sin(-theta), np.cos(-theta) , 0.],
+                               [0., 0.             , 0.             , 1.]], dtype='double')
+            iMM3a = np.linalg.inv(MM3a)
+            MMa=MM1a@MM2a@MM3a
+            data3a = np.einsum('ij,abjc->abic', iMM3a, data2a)
+
+        else:
+            iMM2a = MM2a = np.array( [[1., 0., 0., 0.],
+                                    [0., 1., 0., 0.],
+                                    [0., 0., 1., 0.],
+                                    [0., 0., 0., 1.]], dtype='double')
+            data2a =  np.einsum('ij,abjc->abic', iMM2a, data1a)
+        
+            # Apply final sign correction to match original spectra
+            iMM3a = np.array( [[1., 0., 0., 0.],
+                            [0., 1., 0., 0.],
+                            [0., 0., 1., 0.],
+                            [0., 0., 0., 1.]], dtype='double')
+            MM3a = np.linalg.inv(iMM3a)
+            MMa=MM1a@MM2a@MM3a
+            data3a = np.einsum('ij,abjc->abic', iMM3a, data2a)
+        
+        return MM1a, MM2a, MM3a, None, None, None, data3a
 
 def crosstalk_auto_ItoQUV(data_demod,cpos,wl,roi=np.ones((2048,2048)),verbose=0,npoints=5000,limit=0.2):
     """Get crosstalk coefficients for I to Q,U,V

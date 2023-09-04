@@ -115,7 +115,7 @@ def phihrt_pipe(input_json_file):
     SPGYlib
 
     '''
-    version = 'V1.8.0 July 26th 2023'
+    version = 'V1.8.1 September 4th 2023'
 
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
     printc('PHI HRT data reduction software  ',bcolors.OKGREEN)
@@ -170,15 +170,10 @@ def phihrt_pipe(input_json_file):
         demod = input_dict['demod']
         norm_stokes = input_dict['norm_stokes']
         ItoQUV = input_dict['ItoQUV']
+        CTmode = input_dict['CTmode']
         VtoQU = input_dict['VtoQU']
-        PSForbit = input_dict['PSForbit']  
+        PSFstokes = input_dict['PSFstokes']  
         PSFaberr = input_dict['PSFaberr']  
-
-        #is PSForbit is 'perihelion' or '0.5'
-        if PSForbit is not False:
-            PSFstokes = True
-        else:
-            PSFstokes = False
 
         if 'ghost_c' in input_dict:
             ghost_c = input_dict['ghost_c']  #20211116
@@ -192,10 +187,29 @@ def phihrt_pipe(input_json_file):
         rte = input_dict['rte']
         out_intermediate = input_dict['out_intermediate']  #20211116
         pymilos_opt = input_dict['pymilos']
-        # pixel by pixel shift not implemented yet in pymilos
-        if cavity_c:
-            pymilos_opt = False
         
+        # inputs for RTE inversions. Last update of the values: 2023-09-04
+        if 'weight' in input_dict:
+            weight = np.asarray(input_dict['weight'])
+        else:
+            if 'PSF' in rte:
+                weight = np.asarray([1.,3.8,4.1,3.6]) # with spectral PSF
+            else:
+                weight = np.asarray([1.,3.5,4.,3.5]) # OK without spectral PSF
+            # if iss_off:
+            #     weight = np.asarray([1.,4.,5.4,4.1]) # until RSW 6
+
+        if 'initial_model' in input_dict:
+            initial_model = np.asarray(input_dict['initial_model'])
+        else:
+            if 'PSF' in rte:
+                initial_model = np.asarray([400,30,120,1.,0.03,0.05,.01,.2,.8]) # with spectral PSF
+            else:
+                initial_model = np.asarray([400,30,120,14.,0.06,0.05,.5,.25,.75]) # OK without spectral PSF
+            # if iss_off:
+            #     initial_model = np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]) # until RSW 6
+    
+
         #output dir/filenames
         out_dir = input_dict['out_dir']
         out_stokes_file = input_dict['out_stokes_file']
@@ -273,7 +287,12 @@ def phihrt_pipe(input_json_file):
             else:
                 iss_off = False
                 printc('-->>>>>>> ISS is ON',color=bcolors.OKGREEN) 
-
+        # change RTE parameters if ISS is off and if they were chosen automatically
+        if iss_off:
+            if 'weight' not in input_dict:
+                weight = np.asarray([1.,4.,5.4,4.1]) # until RSW 6
+            if 'initial_model' not in input_dict:
+                initial_model = np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]) # until RSW 6
         #--------
         # test if the scans have different sizes
         #--------
@@ -352,7 +371,7 @@ def phihrt_pipe(input_json_file):
 
     if flat_c:
         
-        flat, flat_pmp_temp, header_flat = load_and_process_flat(flat_f,accum_scaling,bit_conversion,scale_data,header_imgdirx_exists,imgdirx_flipped,cpos_arr)
+        flat, flat_pmp_temp, header_flat = load_and_process_flat(flat_f,accum_scaling,bit_conversion,scale_data,header_imgdirx_exists,imgdirx_flipped,cpos_arr,pmp_temp)
 
     else:
         print(" ")
@@ -441,6 +460,8 @@ def phihrt_pipe(input_json_file):
         prefilter_c = True
         start_time = time.perf_counter()
 
+        # data = prefilter_correction(data,wave_axis_arr,rows,cols,imgdirx_flipped)
+
         prefilter, _ = load_fits(prefilter_f)
         if imgdirx_flipped == 'YES':
             print('Flipping prefilter on the Y axis')
@@ -452,6 +473,7 @@ def phihrt_pipe(input_json_file):
         wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True)
         wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0]) 
         flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],prefilter,TemperatureCorrection=TemperatureCorrection)[...,0]
+        # flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),imgdirx_flipped)[...,0]
         
         for hdr in hdr_arr:
             hdr['CAL_PRE'] = prefilter_f
@@ -687,7 +709,7 @@ def phihrt_pipe(input_json_file):
              
             if fs_c:
                 Ic_temp *= field_stop[rows,cols]
-            
+                limb_mask *= field_stop[rows,cols,np.newaxis]
             Ic_temp = np.array(Ic_temp, dtype=bool)
             
             ##################################################################
@@ -743,52 +765,41 @@ def phihrt_pipe(input_json_file):
         #get ctalk parameters
         for scan, scan_hdr in enumerate(hdr_arr):
             printc(f'  ---- >>>>> CT parameters computation of data scan number: {scan} .... ',color=bcolors.OKGREEN)
-            if ghost_c: #20211116
-                ctalk_params = crosstalk_auto_ItoQUV(data[...,scan],cpos_arr[scan],cpos_arr[scan],roi=np.asarray(Ic_mask[...,scan]*field_stop_ghost[rows,cols],dtype=bool)) #20211116
-            else: #20211116
-                ctalk_params = crosstalk_auto_ItoQUV(data[...,scan],cpos_arr[scan],cpos_arr[scan],roi=Ic_mask[...,scan]) #20211116
+            # if ghost_c: #20211116
+            #     ctalk_params = crosstalk_auto_ItoQUV(data[...,scan],cpos_arr[scan],cpos_arr[scan],roi=np.asarray(Ic_mask[...,scan]*field_stop_ghost[rows,cols],dtype=bool)) #20211116
+            # else: #20211116
+            #     ctalk_params = crosstalk_auto_ItoQUV(data[...,scan],cpos_arr[scan],cpos_arr[scan],roi=Ic_mask[...,scan]) #20211116
             
-            CTparams[...,scan] = ctalk_params
+            cQ, cU, cV, sfitQ, sfitU, sfitV, data[...,scan] = crosstalk_2D_ItoQUV(data[...,scan],
+                                                                                  False,
+                                                                                  limb_mask[...,scan],
+                                                                                  mode=CTmode,
+                                                                                  threshold = .5,
+                                                                                  divisions = 16,
+                                                                                  norma = 2,
+                                                                                  VtoQU = VtoQU)
+            # CTparams[...,scan] = ctalk_params
             
-            scan_hdr['CAL_CRT0'] = round(ctalk_params[slope,q],4) #I-Q slope
-            scan_hdr['CAL_CRT2'] = round(ctalk_params[slope,u],4) #I-U slope
-            scan_hdr['CAL_CRT4'] = round(ctalk_params[slope,v],4) #I-V slope
-            scan_hdr['CAL_CRT1'] = round(ctalk_params[offset,q],4) #I-Q offset
-            scan_hdr['CAL_CRT3'] = round(ctalk_params[offset,u],4) #I-U offset
-            scan_hdr['CAL_CRT5'] = round(ctalk_params[offset,v],4) #I-V offset
+            # scan_hdr['CAL_CRT0'] = round(ctalk_params[slope,q],4) #I-Q slope
+            # scan_hdr['CAL_CRT2'] = round(ctalk_params[slope,u],4) #I-U slope
+            # scan_hdr['CAL_CRT4'] = round(ctalk_params[slope,v],4) #I-V slope
+            # scan_hdr['CAL_CRT1'] = round(ctalk_params[offset,q],4) #I-Q offset
+            # scan_hdr['CAL_CRT3'] = round(ctalk_params[offset,u],4) #I-U offset
+            # scan_hdr['CAL_CRT5'] = round(ctalk_params[offset,v],4) #I-V offset
+            
+            # handling of the header is still missing
+            scan_hdr['CAL_CRT0'] = round(np.mean(cQ[0]),4) #I-Q slope
+            scan_hdr['CAL_CRT2'] = round(np.mean(cU[0]),4) #I-U slope
+            scan_hdr['CAL_CRT4'] = round(np.mean(cV[0]),4) #I-V slope
+            scan_hdr['CAL_CRT3'] = round(np.mean(cQ[1]),4) #I-U offset
+            scan_hdr['CAL_CRT1'] = round(np.mean(cU[1]),4) #I-Q offset
+            scan_hdr['CAL_CRT5'] = round(np.mean(cV[1]),4) #I-V offset
             
             scan_hdr['CAL_CRT6'] = 0 #V-Q slope
             scan_hdr['CAL_CRT8'] = 0 #V-U slope
             scan_hdr['CAL_CRT7'] = 0 #V-Q offset
             scan_hdr['CAL_CRT9'] = 0 #V-U offset
                 
-        #apply crosstalk correction - with error handling        
-        try:    
-            data = CT_ItoQUV(data, CTparams, norm_stokes, cpos_arr, Ic_mask*AR_mask) # new continuum normalization
-
-        except Exception:
-            print("There was an issue applying the I -> Q,U,V cross talk correction")
-            if 'Ic_mask' not in vars():
-                print("This could be because 'Ic_mask' was not initialised")
-                if data.shape[:2] == (2048,2048):
-                    response = input("The input data is 2k x 2k \n Are all the input data files disk centre pointing? [y/n]")
-                    if response == 'y' or response == 'Y':
-                        try:
-                            Ic_mask = np.zeros(data_size)
-                            Ic_mask[ceny,cenx] = 1
-                            Ic_mask = np.where(Ic_mask>0,1,0)
-                            Ic_mask = np.array(Ic_mask, dtype = bool)
-                            data = CT_ItoQUV(data, ctalk_params, norm_stokes, cpos_arr, Ic_mask[rows,cols])
-                        except Exception:
-                            print("Unable to handle error\n Please check the input config file\n Aborting")
-                            exit()
-                    else:
-                        raise KeyError("Response was not 'y' or 'Y'\n 'norm_f' keyword in input config file not set to True\n Aborting")
-                else:
-                    raise KeyError("The issue could not be overcome as the Input data is not 2k x 2k\n 'norm_f' keyword in input config file not set to True\n Aborting")
-            else:
-                raise KeyError("Unable to handle error \n Aborting")
-
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
         printc(f"------------- I -> Q,U,V cross talk correction time: {np.round(time.perf_counter() - start_time,3)} seconds ",bcolors.OKGREEN)
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
@@ -801,35 +812,37 @@ def phihrt_pipe(input_json_file):
         printc('-->>>>>>> No ItoQUV mode',color=bcolors.WARNING)
 
     if VtoQU:
-        
-        print(" ")
-        printc('-->>>>>>> Cross-talk correction V to Q,U ',color=bcolors.OKGREEN)
+        if CTmode == 'jaeggli':
+            printc('-->>>>>>> Cross-talk correction V to Q,U already applied',color=bcolors.OKGREEN)
+        else:        
+            print(" ")
+            printc('-->>>>>>> Cross-talk correction V to Q,U ',color=bcolors.OKGREEN)
 
-        start_time = time.perf_counter()
+            start_time = time.perf_counter()
 
-        slope, offset = 0, 1
-        q, u = 0, 1
-        CTparams = np.zeros((2,2,number_of_scans))
-        
-        for scan, scan_hdr in enumerate(hdr_arr):
-            printc(f'  ---- >>>>> CT parameters computation of data scan number: {scan} .... ',color=bcolors.OKGREEN)
-            if ghost_c: #20211116
-                ctalk_params = crosstalk_auto_VtoQU(data[...,scan],slice(0,6),slice(0,6),roi=np.asarray(Ic_mask[...,scan]*field_stop_ghost[rows,cols],dtype=bool),nlevel=0.3) #20211116
-            else: #20211116
-                ctalk_params = crosstalk_auto_VtoQU(data[...,scan],slice(0,6),slice(0,6),roi=Ic_mask[...,scan],nlevel=0.3) #20211116
+            slope, offset = 0, 1
+            q, u = 0, 1
+            CTparams = np.zeros((2,2,number_of_scans))
             
-            CTparams[...,scan] = ctalk_params
-            #wrong keywords for CT parameters: fixed on 2022-10-07
-            scan_hdr['CAL_CRT6'] = round(ctalk_params[slope,q],4) #V-Q slope
-            scan_hdr['CAL_CRT8'] = round(ctalk_params[slope,u],4) #V-U slope
-            scan_hdr['CAL_CRT7'] = round(ctalk_params[offset,q],4) #V-Q offset
-            scan_hdr['CAL_CRT9'] = round(ctalk_params[offset,u],4) #V-U offset
+            for scan, scan_hdr in enumerate(hdr_arr):
+                printc(f'  ---- >>>>> CT parameters computation of data scan number: {scan} .... ',color=bcolors.OKGREEN)
+                if ghost_c: #20211116
+                    ctalk_params = crosstalk_auto_VtoQU(data[...,scan],slice(0,6),slice(0,6),roi=np.asarray(Ic_mask[...,scan]*field_stop_ghost[rows,cols],dtype=bool),nlevel=0.3) #20211116
+                else: #20211116
+                    ctalk_params = crosstalk_auto_VtoQU(data[...,scan],slice(0,6),slice(0,6),roi=Ic_mask[...,scan],nlevel=0.3) #20211116
                 
-        data = CT_VtoQU(data, CTparams)
-        
-        printc('--------------------------------------------------------------',bcolors.OKGREEN)
-        printc(f"------------- V -> Q,U cross talk correction time: {np.round(time.perf_counter() - start_time,3)} seconds ",bcolors.OKGREEN)
-        printc('--------------------------------------------------------------',bcolors.OKGREEN)
+                CTparams[...,scan] = ctalk_params
+                #wrong keywords for CT parameters: fixed on 2022-10-07
+                scan_hdr['CAL_CRT6'] = round(ctalk_params[slope,q],4) #V-Q slope
+                scan_hdr['CAL_CRT8'] = round(ctalk_params[slope,u],4) #V-U slope
+                scan_hdr['CAL_CRT7'] = round(ctalk_params[offset,q],4) #V-Q offset
+                scan_hdr['CAL_CRT9'] = round(ctalk_params[offset,u],4) #V-U offset
+                    
+            data = CT_VtoQU(data, CTparams)
+            
+            printc('--------------------------------------------------------------',bcolors.OKGREEN)
+            printc(f"------------- V -> Q,U cross talk correction time: {np.round(time.perf_counter() - start_time,3)} seconds ",bcolors.OKGREEN)
+            printc('--------------------------------------------------------------',bcolors.OKGREEN)
         
         if not iss_off or not PSFstokes:
             data *= field_stop[rows,cols, np.newaxis, np.newaxis, np.newaxis]
@@ -874,8 +887,8 @@ def phihrt_pipe(input_json_file):
         print(" ")
         printc('-->>>>>>> PSF deconvolution on Stokes vectors',color=bcolors.OKGREEN)
         for scan in range(data_shape[-1]):
-            data[...,scan] = restore_stokes_cube(data[...,scan], hdr_arr[scan],orbit=PSForbit,aberr_cor=PSFaberr)
-            hdr_arr[scan]['CAL_PSF'] = PSForbit+'; aberration: '+str(PSFaberr)
+            data[...,scan] = restore_stokes_cube(data[...,scan], hdr_arr[scan],aberr_cor=PSFaberr)
+            hdr_arr[scan]['CAL_PSF'] = 'Interpolated PSF; aberration: '+str(PSFaberr)
 
         data *= field_stop[rows,cols, np.newaxis, np.newaxis, np.newaxis]
 
@@ -1044,15 +1057,11 @@ def phihrt_pipe(input_json_file):
             data = np.mean(data, axis = (-1))
             data_shape = (data_size[0], data_size[1], 1)
 
-        RTE_code = 'pymilos' # it will become an input in the json (DEFAULT: 'pymilos')
+        if pymilos_opt:
+            RTE_code = 'pymilos' # it will become an input in the json (DEFAULT: 'pymilos')
+        else:
+            RTE_code = 'cmilos'
         options = []
-        # weight = np.asarray([1.,4.,5.4,4.1]) # until RSW 6
-        # weight = np.asarray([1.,3.5,4.,3.5]) # OK without spectral PSF
-        weight = np.asarray([1.,3.8,4.1,3.6]) # with spectral PSF
-        
-        # initial_model = np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]) # until RSW 6
-        # initial_model = np.asarray([400,30,120,14.,0.06,0.05,.5,.25,.75]) # OK without spectral PSF
-        initial_model = np.asarray([400,30,120,1.,0.03,0.05,.01,.2,.8]) # with spectral PSF
 
         generate_l2(data_f, hdr_arr, wave_axis_arr, cpos_arr, 
                     data, RTE_code, rte, 
