@@ -10,12 +10,6 @@ export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/local/cfitsio/cfitsio-3.350/include
 
 #compile the rte codes
 
-cd ./cmilos
-make clear
-make
-
-cd ..
-
 cd pymilos/lib
 make clean
 make
