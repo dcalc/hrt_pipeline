@@ -6,6 +6,7 @@ import scipy.optimize as spo
 import scipy.signal as sps
 from datetime import datetime as dt
 import datetime
+import time
 
 from astropy.constants import c, R_sun
 from scipy.ndimage import map_coordinates
@@ -409,9 +410,10 @@ def check_pmp_temp(hdr_arr):
     first_pmp_temp = int(hdr_arr[0]['HPMPTSP1'])
     result = all(hdr['HPMPTSP1'] == first_pmp_temp for hdr in hdr_arr)
     if (result):
-        t0 = dt(2023,3,28,0,0,0)
-        t1 = dt(2023,3,30,0,0,0)
-        tobs = dt.fromisoformat(hdr_arr[0]['DATE-OBS'][:-4])
+        t0 = time.strptime('2023-03-28T00:10:00','%Y-%m-%dT%H:%M:%S')
+        t1 = time.strptime('2023-03-30T00:10:00','%Y-%m-%dT%H:%M:%S')
+        tobs = time.strptime(hdr_arr[0]['DATE-OBS'][:-4],'%Y-%m-%dT%H:%M:%S')
+        
         if (tobs > t0 and tobs < t1):
             first_pmp_temp = 50
             printc('WARNING: Data acquired on 2023-03-28 and 2023-03-29 have a PMP temperature setting to 40 deg, but the PMP are fluctuating at ~45 deg \nException to HRT pipeline to use the 50 deg demodulation matrix.',color=bcolors.WARNING)
