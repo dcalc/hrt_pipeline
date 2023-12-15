@@ -135,7 +135,7 @@ def get_data(path, scaling = True, bit_convert_scale = True, scale_data = True):
         raise ValueError()
        
 
-def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = False, verbose = False):
+def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = True, TemperatureConstant = 36.46e-3, verbose = False):
     '''Open fits file, extract the wavelength axis and the continuum position, from Voltages in header
 
     Parameters
@@ -146,6 +146,8 @@ def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = False, verbose = 
         number of wavelength
     TemperatureCorrection: bool
         if True, apply temperature correction to the wavelength axis
+    TemperatureConstant: float
+        Temperature constant to be used when TemperatureCorrection is True. Default: 36.46e-3 Å/K. Suggested (old) value: 40.323e-3 Å/K
     verbose: bool
         if True, print the continuum position
     
@@ -204,12 +206,11 @@ def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = False, verbose = 
         if verbose:
             printc('-->>>>>>> If FG temperature is not 61, the relation wl = wlref + V * tunning_constant is not valid anymore',color=bcolors.WARNING)
             printc('          Use instead: wl =  wlref + V * tunning_constant + temperature_constant_new*(Tfg-61)',color=bcolors.WARNING)
-        temperature_constant_old = 40.323e-3 # old temperature constant, still used by Johann
+        # temperature_constant_old = 40.323e-3 # old temperature constant, still used by Johann
         # temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
-        temperature_constant_new = 36.46e-3 # value from HS# wave_axis += temperature_constant_old*(Tfg-61)
-        wave_axis += temperature_constant_new*(Tfg-61) # 20221123 see cavity_maps.ipynb with example
-        # voltagesData += np.round((temperature_constant_old-temperature_constant_new)*(Tfg-61)/tunning_constant,0)
-
+        # temperature_constant_new = 36.46e-3 # value from HS
+        wave_axis += TemperatureConstant*(Tfg-61) # 20221123 see cavity_maps.ipynb with example
+        
     return wave_axis,voltagesData,tunning_constant,cpos
 
 
@@ -1681,13 +1682,20 @@ def image_register(ref,im,subpixel=True,deriv=False,d=50):
     r = fft.fftshift(r)
     rmax=np.max(r)
     ppp = np.unravel_index(np.argmax(r),ss)
-    shifts = [(ss[0]//2-(ppp[0])),(ss[1]//2-(ppp[1]))]
+    shifts = [ppp[0]-ss[0]//2,ppp[1]-ss[1]//2]
     if subpixel:
-        if d>0:
-            mask = circular_mask(ss[0],ss[1],[ppp[1],ppp[0]],d)
-        else:
-            mask[:,:] = np.ones(ss,dtype=bool); d = ss[0]//2
-        g, A = _gauss2dfit(r,mask)
+        dd = [d,75,100,30]
+        for d1 in dd:
+            try:
+                if d1>0:
+                    mask = circular_mask(ss[0],ss[1],[ppp[1],ppp[0]],d1)
+                else:
+                    mask = np.ones(ss,dtype=bool); d = ss[0]//2
+                g, A = _gauss2dfit(r,mask)
+            except RuntimeError as e:
+                print(f"Issue with gaussian fitting using mask with radius {d1}\nTrying new value...")
+                if d1 == dd[-1]:
+                    raise RuntimeError(e)
         shifts[0] = A[5]
         shifts[1] = A[4]
         del g
@@ -1761,7 +1769,7 @@ def remap(hrt_map, hmi_map, out_shape = (1024,1024), verbose = False):
     
     # reprojection
     hmi_origin = hmi_map
-    output, footprint = reproject_adaptive(hmi_origin, out_wcs, out_shape)
+    output, footprint = reproject_adaptive(hmi_origin, out_wcs, out_shape,kernel='Hann',boundary_mode='ignore')
     hmi_map = sunpy.map.Map(output, out_header)
     hmi_map.plot_settings = hmi_origin.plot_settings
 
@@ -1781,16 +1789,99 @@ def remap(hrt_map, hmi_map, out_shape = (1024,1024), verbose = False):
     
     return hmi_map
 
-def subregion_selection(ht,start_row,start_col,original_shape,dsmax = 512):
+def subregion_selection(ht,start_row,start_col,original_shape,dsmax = 512,edge = 20):
     intcrpix1 = int(round(ht['CRPIX1']))
     intcrpix2 = int(round(ht['CRPIX2']))
-    ds = min(dsmax,intcrpix2-start_row,intcrpix1-start_col,original_shape[0]+start_row-intcrpix2,original_shape[1]+start_col-intcrpix1)
+    ds = min(dsmax,
+             intcrpix2-start_row-edge,
+             intcrpix1-start_col-edge,
+             original_shape[0]+start_row-intcrpix2-edge,
+             original_shape[1]+start_col-intcrpix1-edge)
     sly = slice(intcrpix2-ds,intcrpix2+ds)
     slx = slice(intcrpix1-ds,intcrpix1+ds)
     
     return sly, slx
 
-def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpol=False, allDID=False,verbose=False, deriv = True, values_only = False):
+def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False):
+    """
+    Script to download the HMI m_45 or ic_45 cosest in time to the provided SO/PHI observation.
+    TAI convention and light travel time are taken into consideration.
+    
+    Parameters
+    ----------
+    ht: astropy.io.fits.header.Header
+        header of the SO/PHI observation
+    t_obs: str, datetime.datetime
+        observation time of the SO/PHI observation. A string can be provided, but it is expected to be isoformat
+    jsoc_email: str
+        email address to be used for JSOC connection
+    verbose: bool
+        if True, plot of the HMI map will be shown (DEFAULT: False)
+    path: bool
+        if True, the path of the cache directory and of the HMI dataset will return as output (DEFAULT: False)
+    """
+    
+    import drms
+    import sunpy, sunpy.map
+    from astropy.constants import c
+    
+    if type(t_obs) == str:
+        t_obs = datetime.datetime.fromisoformat(t_obs)
+    dtai = datetime.timedelta(seconds=37) # datetime.timedelta(seconds=94)
+    dcad = datetime.timedelta(seconds=35) # half HMI cadence (23) + margin
+    
+    dltt = datetime.timedelta(seconds=ht['EAR_TDEL']) # difference in light travel time S/C-Earth
+
+    kwlist = ['T_REC','T_OBS','DATE-OBS','CADENCE','DSUN_OBS']
+    
+    client = drms.Client(email=jsoc_email, verbose=True) 
+
+    if ht['BTYPE'] == 'BLOS':
+        keys = client.query('hmi.m_45s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
+                           (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
+    elif ht['BTYPE'] == 'VLOS':
+        keys = client.query('hmi.v_45s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
+                           (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
+    else:
+        keys = client.query('hmi.ic_45s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
+                           (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
+
+    lt = (np.mean(keys['DSUN_OBS'])*u.m - ht['DSUN_OBS']*u.m)/c
+    dltt = datetime.timedelta(seconds=lt.value) # difference in light travel time S/C-SDO
+    
+    
+    T_OBS = [np.abs((datetime.datetime.strptime(t,'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds()) for t in keys['T_OBS']]
+    ind = np.argmin(T_OBS)
+
+    if ht['BTYPE'] == 'BLOS':
+        name_h = 'hmi.m_45s['+keys['T_REC'][ind]+']{Magnetogram}'
+    if ht['BTYPE'] == 'VLOS':
+        name_h = 'hmi.v_45s['+keys['T_REC'][ind]+']{Dopplergram}'
+    else:
+        name_h = 'hmi.ic_45s['+keys['T_REC'][ind]+']{Continuum}'
+
+    if np.abs((datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds()) > 23:
+        print('WARNING: Closer file exists but has not been found.')
+        print(name_h)
+        print('T_OBS:',datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
+        print('DATE-AVG:',t_obs)
+        print('')
+    else:
+        print('HMI T_OBS (corrected for TAI and Light travel time):',datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
+        print('PHI DATE-AVG:',t_obs)
+    s45 = client.export(name_h,protocol='fits')
+    hmi_map = sunpy.map.Map(s45.urls.url[0],cache=False)
+    cache_dir = sunpy.data.CACHE_DIR+'/'
+    hmi_name = cache_dir + s45.urls.url[0].split("/")[-1]
+
+    if verbose:
+        hmi_map.peek()
+    if path:
+        return hmi_map, cache_dir, hmi_name
+    else:
+        return hmi_map
+
+def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undistortion = False, logpol=False, allDID=False,verbose=False, deriv = True, values_only = False):
     """This function saves new version of the fits file with updated WCS.
     It works by correlating HRT data on remapped HMI data. 
     This function exports the nearest HMI data from JSOC. [Not downloaded to out_dir]
@@ -1810,6 +1901,8 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
         email address to be used for JSOC connection
     dir_out: str
         path to the output directory, DEFAULT: './', if None no file will be saved
+    remapping: str
+        type of remapping procedure. 'remap' uses the reprojection algorithm by DeForest, 'ccd' uses a coordinate translation from HMI to HRT based on function in this file (not working yet). DEFAULT: 'remap'
     undistortion: bool
         if True, HRT will be undistorted (DEFAULT: False).
     logpol: bool
@@ -1828,19 +1921,20 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
     ht: astropy.io.fits.header.Header
         new header for hrt
     """
-    import sunpy, drms, imreg_dft
+    import sunpy, imreg_dft
     import sunpy.map
     from reproject import reproject_interp, reproject_adaptive
     from sunpy.coordinates import get_body_heliographic_stonyhurst
+    from astropy.constants import c
 
     from sunpy.coordinates import frames
     import warnings, sunpy
     warnings.filterwarnings("ignore", category=sunpy.util.SunpyMetadataWarning)
 
     
-    print('This is a preliminary procedure')
-    print('It has been optimized on raw, continuum and blos data')
-    print('This script is based on sunpy routines and examples')
+    # print('This is a preliminary procedure')
+    # print('It has been optimized on raw, continuum and blos data')
+    # print('This script is based on sunpy routines and examples')
     
     hdr_phi = fits.open(file_name)
     phi = hdr_phi[0].data; h_phi = hdr_phi[0].header
@@ -1851,7 +1945,10 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
     if phi.ndim == 3:
         phi = phi[cpos*4]
     elif phi.ndim == 4:
-        phi = phi[:,:,0,cpos]
+        if phi.shape[0] == 6:
+            phi = phi[cpos,0]            
+        else:
+            phi = phi[:,:,0,cpos]
     original_shape = phi.shape
     
     if phi.shape[0] == 2048:
@@ -1864,6 +1961,7 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
     else:
         phi = np.pad(phi,[(start_row,2048-(start_row+phi.shape[0])),(start_col,2048-(start_row+phi.shape[1]))])
         h_phi['NAXIS1'] = 2048; h_phi['NAXIS2'] = 2048
+        h_phi['PXBEG1'] = 1; h_phi['PXBEG2'] = 1; h_phi['PXEND1'] = 2048; h_phi['PXEND2'] = 2048; 
         h_phi['CRPIX1'] += start_col; h_phi['CRPIX2'] += start_row
         if undistortion:
             und_phi = und(phi)
@@ -1887,49 +1985,12 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
         t0 = t0[0]
         
     t_obs = datetime.datetime.fromisoformat(t0)
-    
-    dtai = datetime.timedelta(seconds=37) # datetime.timedelta(seconds=94)
-    dcad = datetime.timedelta(seconds=35) # half HMI cadence (23) + margin
-    
-    dltt = datetime.timedelta(seconds=ht['EAR_TDEL']) # difference in light travel time S/C-Earth
-
-    kwlist = ['T_REC','T_OBS','DATE-OBS','CADENCE','DSUN_OBS']
+    if ht['BTYPE'] == 'BLOS':
+        t0 = ht['DATE-AVG']
+        t_obs = datetime.datetime.fromisoformat(ht['DATE-AVG'])
     
     try:
-        client = drms.Client(email=jsoc_email, verbose=True) 
-    
-        if ht['BTYPE'] == 'BLOS':
-            keys = client.query('hmi.m_45s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
-                               (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
-        else:
-            keys = client.query('hmi.ic_45s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
-                               (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
-        
-        lt = (np.mean(keys['DSUN_OBS'])*u.m - phi_map.dsun).to(u.m)/c
-        dltt = datetime.timedelta(seconds=lt.value) # difference in light travel time S/C-SDO
-
-        ind = np.argmin([np.abs((datetime.datetime.strptime(t,'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds())
-                         for t in keys['T_OBS']])
-        
-        if ht['BTYPE'] == 'BLOS':
-            name_h = 'hmi.m_45s['+keys['T_REC'][ind]+']{Magnetogram}'
-        else:
-            name_h = 'hmi.ic_45s['+keys['T_REC'][ind]+']{Continuum}'
-
-        if np.abs((datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds()) > 23:
-            print('WARNING: Closer file exists but has not been found.')
-            print(name_h)
-            print('T_OBS:',datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
-            print('DATE-AVG:',t_obs)
-            print('')
-
-        s45 = client.export(name_h,protocol='fits')
-        hmi_map = sunpy.map.Map(s45.urls.url[0],cache=False)
-        cache_dir = sunpy.data.CACHE_DIR+'/'
-        hmi_name = cache_dir + s45.urls.url[0].split("/")[-1]
-        
-        if verbose:
-            hmi_map.peek()
+        hmi_map, cache_dir, hmi_name = downloadClosestHMI(ht,t_obs,jsoc_email,verbose,True)
     except Exception as e:
         print("Issue with downloading HMI. The code stops here. Restults obtained so far will be saved. This was the error:")
         print(e)
@@ -1943,46 +2004,54 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
 
     ht = h_phi.copy()
     ht['DATE-BEG'] = ht['DATE-AVG']; ht['DATE-OBS'] = ht['DATE-AVG']
-    ht['DATE-BEG'] = datetime.datetime.isoformat(datetime.datetime.fromisoformat(ht['DATE-BEG']) + dltt)
-    ht['DATE-OBS'] = datetime.datetime.isoformat(datetime.datetime.fromisoformat(ht['DATE-OBS']) + dltt)
+    # ht['DATE-BEG'] = datetime.datetime.isoformat(datetime.datetime.fromisoformat(ht['DATE-BEG']) + dltt)
+    # ht['DATE-OBS'] = datetime.datetime.isoformat(datetime.datetime.fromisoformat(ht['DATE-OBS']) + dltt)
     shift = [1,1]
     i = 0
     angle = 1
-    match = False
+    match = True
     
     # hgsPHI = ccd2HGS(phi_map.fits_header)
     # hgsHMI = ccd2HGS(hmi_map.fits_header)
-    hmi_remap = hmi2phi(hmi_map,phi_map)
+    # hmi_remap = hmi2phi(hmi_map,phi_map)
 
     try:
         while np.any(np.abs(shift)>5e-2):
-            # phi_map = sunpy.map.Map((und_phi,ht))
-
-            # bl = phi_map.pixel_to_world(slx.start*u.pix, sly.start*u.pix)
-            # tr = phi_map.pixel_to_world((slx.stop-1)*u.pix, (sly.stop-1)*u.pix)
-            # phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
-            #                       top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
-
-            # hmi_map_remap = remap(phi_map, hmi_map, out_shape = (2048,2048), verbose=False)
-
-            # top_right = hmi_map_remap.world_to_pixel(tr)
-            # bottom_left = hmi_map_remap.world_to_pixel(bl)
-            # tr_hmi_map = np.array([top_right.x.value,top_right.y.value])
-            # bl_hmi_map = np.array([bottom_left.x.value,bottom_left.y.value])
-            # hmi_map_wcs = hmi_map_remap.submap(bl_hmi_map*u.pix,top_right=tr_hmi_map*u.pix)
 
             sly, slx = subregion_selection(ht,start_row,start_col,original_shape,dsmax = 512)
             print('Subregion size:',sly.stop-sly.start)
 
-            phi_map = sunpy.map.Map((und_phi,ht))
-            # hgsPHI = ccd2HGS(phi_map.fits_header)
+            if remapping == 'remap':
+                phi_map = sunpy.map.Map((und_phi,ht))
+
+                bl = phi_map.pixel_to_world(slx.start*u.pix, sly.start*u.pix)
+                tr = phi_map.pixel_to_world((slx.stop-1)*u.pix, (sly.stop-1)*u.pix)
+                phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
+                                    top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
+
+                hmi_remap = remap(phi_map, hmi_map, out_shape = (2048,2048), verbose=False)
+
+                top_right = hmi_remap.world_to_pixel(tr)
+                bottom_left = hmi_remap.world_to_pixel(bl)
+                tr_hmi_map = np.array([top_right.x.value,top_right.y.value])
+                bl_hmi_map = np.array([bottom_left.x.value,bottom_left.y.value])
+                slyhmi = slice(int(round(bl_hmi_map[1])),int(round(tr_hmi_map[1]))+1)
+                slxhmi = slice(int(round(bl_hmi_map[0])),int(round(tr_hmi_map[0]))+1)
+                hmi_map_wcs = hmi_remap.submap(bl_hmi_map*u.pix,top_right=tr_hmi_map*u.pix)
+
             
-            hmi_remap = sunpy.map.Map((hmi2phi(hmi_map,phi_map),ht))
-            
-            phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
-                                top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
-            hmi_map_wcs = hmi_remap.submap(np.asarray([slx.start, sly.start])*u.pix,
-                                top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
+            elif remapping == 'ccd':
+                phi_map = sunpy.map.Map((und_phi,ht))
+                # hgsPHI = ccd2HGS(phi_map.fits_header)
+                
+                hmi_remap = sunpy.map.Map((hmi2phi(hmi_map,phi_map),ht))
+                
+                phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
+                                    top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
+                slyhmi = sly
+                slxhmi = slx
+                hmi_map_wcs = hmi_remap.submap(np.asarray([slx.start, sly.start])*u.pix,
+                                    top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
 
             ref = phi_submap.data.copy()
             temp = hmi_map_wcs.data.copy(); temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
@@ -2009,7 +2078,8 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
                         _,s = image_register(ref,temp,True,deriv)
                         # sr, sc, _ = SPG_shifts_FFT(np.asarray([ref,temp])); s = [sr[1],sc[1]]
                     shift = [shift[0]+s[0],shift[1]+s[1]]
-                    temp = fft_shift(hmi_map_wcs.data.copy(), shift); temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
+                    # temp = fft_shift(hmi_map_wcs.data.copy(), shift); temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
+                    temp = fft_shift(hmi_remap.data.copy(), shift)[slyhmi,slxhmi]; temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
                     it += 1
                     
                 hmi_map_shift = sunpy.map.Map((temp,hmi_map_wcs.fits_header))
@@ -2020,19 +2090,45 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
             i+=1
             if i == 10:
                 print('Maximum iterations reached:',i)
+                match = False
                 break
     except Exception as e:
         printc("Issue with co-alignment. The code stops here. Restults obtained so far will be saved. This was the error:",bcolors.FAIL)
         printc(e,bcolors.FAIL)
+        print(f'{it} iterations shift (x,y): {round(shift[1],2),round(shift[0],2)}',bcolors.FAIL)
         return ht['CROTA'], ht['CRPIX1'] - start_col, ht['CRPIX2'] - start_row, ht['CRVAL1'], ht['CRVAL2'], t0, False, phi_map, hmi_remap
     
-    phi_map = sunpy.map.Map((und_phi,ht))
-    hmi_remap = sunpy.map.Map((hmi2phi(hmi_map,phi_map),ht))
+    if remapping == 'remap':
+        phi_map = sunpy.map.Map((und_phi,ht))
 
-    phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
-                        top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
-    hmi_map_wcs = hmi_remap.submap(np.asarray([slx.start, sly.start])*u.pix,
-                        top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
+        bl = phi_map.pixel_to_world(slx.start*u.pix, sly.start*u.pix)
+        tr = phi_map.pixel_to_world((slx.stop-1)*u.pix, (sly.stop-1)*u.pix)
+        phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
+                            top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
+
+        hmi_remap = remap(phi_map, hmi_map, out_shape = (2048,2048), verbose=False)
+        
+        ht['DATE-BEG'] = h_phi['DATE-BEG']
+        ht['DATE-OBS'] = h_phi['DATE-OBS']
+        phi_map = sunpy.map.Map((und_phi,ht))
+
+        top_right = hmi_remap.world_to_pixel(tr)
+        bottom_left = hmi_remap.world_to_pixel(bl)
+        tr_hmi_map = np.array([top_right.x.value,top_right.y.value])
+        bl_hmi_map = np.array([bottom_left.x.value,bottom_left.y.value])
+        hmi_map_wcs = hmi_remap.submap(bl_hmi_map*u.pix,top_right=tr_hmi_map*u.pix)
+
+    elif remapping == 'ccd':
+        phi_map = sunpy.map.Map((und_phi,ht))
+        hmi_remap = sunpy.map.Map((hmi2phi(hmi_map,phi_map),ht))
+        ht['DATE-BEG'] = h_phi['DATE-BEG']
+        ht['DATE-OBS'] = h_phi['DATE-OBS']
+        phi_map = sunpy.map.Map((und_phi,ht))
+
+        phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
+                            top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
+        hmi_map_wcs = hmi_remap.submap(np.asarray([slx.start, sly.start])*u.pix,
+                            top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
     
     
     if verbose:
@@ -2083,8 +2179,8 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
                     new_name = name.replace("_phi-",".WCS_phi-")
                     with fits.open(f) as h:
                         h[0].header['CROTA'] = ht['CROTA']
-                        h[0].header['CRPIX1'] = ht['CRPIX1']
-                        h[0].header['CRPIX2'] = ht['CRPIX2']
+                        h[0].header['CRPIX1'] = ht['CRPIX1'] - start_col
+                        h[0].header['CRPIX2'] = ht['CRPIX2'] - start_row
                         h[0].header['CRVAL1'] = ht['CRVAL1']
                         h[0].header['CRVAL2'] = ht['CRVAL2']
                         h[0].header['PC1_1'] = ht['PC1_1']
@@ -2096,8 +2192,8 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
             else:
                 with fits.open(file_name) as h:
                     h[0].header['CROTA'] = ht['CROTA']
-                    h[0].header['CRPIX1'] = ht['CRPIX1']
-                    h[0].header['CRPIX2'] = ht['CRPIX2']
+                    h[0].header['CRPIX1'] = ht['CRPIX1'] - start_col
+                    h[0].header['CRPIX2'] = ht['CRPIX2'] - start_row
                     h[0].header['CRVAL1'] = ht['CRVAL1']
                     h[0].header['CRVAL2'] = ht['CRVAL2']
                     h[0].header['PC1_1'] = ht['PC1_1']
@@ -2644,14 +2740,27 @@ def plot_l2_pdf(path,did,version=None):
 
     dat = {}
     keys = ['icnt', 'vlos', 'blos', 'binc', 'bmag', 'bazi', 'chi2']
+    missingKeys = []
     for key in keys:
-        datfile = glob.glob(os.path.join(path, f'solo_L2_phi-hrt-{key}_*_{version}_{did}.fits.gz'))[0]
-        dat[key], h = load_fits(datfile)
+        try:
+            datfile = glob.glob(os.path.join(path, f'solo_L2_phi-hrt-{key}_*_{version}_{did}.fits.gz'))[0]
+            dat[key], h = load_fits(datfile)
+        except:
+            print('Missing '+key)
+            missingKeys += [key]
+    
+    for key in missingKeys:
+        k = next((e for e in keys if e!=key), None)
+        dat[key] = np.zeros(dat[k].shape)
+    
     _, _, _, sly, slx = limb_side_finder(dat['icnt'], h, False)
     
 
     datfile = glob.glob(os.path.join(path, f'solo_L2_phi-hrt-stokes_*_{version}_{did}.fits.gz'))[0]
     stk, h = load_fits(datfile)
+    if stk.shape[0] != 6 or stk.shape[1] != 4:
+        stk = np.einsum('yxpl->lpyx',stk)
+    
     wavelengths,_,_,cpos = fits_get_sampling(datfile)
 
     if version == '*':

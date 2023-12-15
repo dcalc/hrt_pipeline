@@ -362,6 +362,8 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, RTE_code, rte, ma
             hdr_scan['RTE_ITER'] = str(30)
         else:
             hdr_scan['RTE_ITER'] = options[1]
+        hdr_scan.set('RTE_W', str(weight), 'Polarimetric weights used in the RTE code', after='RTE_ITER')
+        hdr_scan.set('RTE_INIT', str(initial_model), 'Initial model used in the RTE code', after='RTE_ITER')
 
         write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir, out_rte_filename, vers)
             

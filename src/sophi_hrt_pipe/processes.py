@@ -39,7 +39,7 @@ def setup_header(hdr_arr):
          'Polarimetric registration','Prealigment of images before demodulation',
     'cross-talk from I to Q (slope)','cross-talk from I to Q (offset)','cross-talk from I to U (slope)','cross-talk from I to U (offset)','cross-talk from I to V (slope)','cross-talk from I to V (offset)',
     'cross-talk from V to Q (slope)','cross-talk from V to Q (offset)','cross-talk from V to U (slope)','cross-talk from V to U (offset)','Wavelength Registration',
-    'Normalization (normalization constant PROC_Ic)','Fringe correction (name + version of module)','PSF deconvolution','Onboard calibrated for instrumental polarization',
+    'Normalization (normalization constant PROC_Ic)','Fringe correction (name + version of module)','PSF deconvolution','Onboard calibrated for instrumental polarizatio',
     'Onboard scientific data analysis','Inversion mode','Inversion software','Number RTE inversion iterations', 'Version of calibration pack']
 
     for h in hdr_arr:
@@ -587,7 +587,7 @@ def prefilter_correctionNew(data,wave_axis_arr,rows,cols,imgdirx_flipped = 'YES'
         data[...,scan] /= prefilter
     return data
 
-def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None, TemperatureCorrection=False):
+def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None, TemperatureCorrection=False, TemperatureConstant = 36.46e-3):
     """Apply prefilter correction to input data
 
     Parameters
@@ -600,8 +600,10 @@ def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None,
         prefilter data
     prefilter_voltages: ndarray
         prefilter voltages, DEFAULT = None - uses latest prefilter voltages from on ground calibration
-    temperatureCorrection: bool
+    TemperatureCorrection: bool
         apply temperature correction to prefilter data, DEFAULT = False
+    TemperatureConstant: float
+        value of the temperature tuning constant to be used when TemperatureConstant is True, DEFAULT = 36.46e-3 mA/K
 
     Returns
     -------
@@ -633,14 +635,14 @@ def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None,
                                         1451.875,  1516.875,  1582.125,  1647.75 ,  1713.875,  1778.375,
                                         1844.   ])
     if TemperatureCorrection:
-        temperature_constant_old = 40.323e-3 # old temperature constant, still used by Johann
+        # temperature_constant_old = 40.323e-3 # old temperature constant, still used by Johann
         # temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
-        temperature_constant_new = 36.46e-3 # value from HS
+        # temperature_constant_new = 36.46e-3 # value from HS
         Tfg = 66 # FG was at 66 deg during e2e calibration
         tunning_constant = 0.0003513 # this shouldn't change
         
         ref_wavelength = 6173.341 # this shouldn't change
-        prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength + temperature_constant_new*(Tfg-61) - 0.002 # JH ref
+        prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength + TemperatureConstant*(Tfg-61) - 0.002 # JH ref
         
         # ref_wavelength = round(6173.072 - (-1300*tunning_constant),3) # 6173.529. 0 level was different during e2e test
         # prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength # + temperature_constant_new*(Tfg-61)
@@ -656,7 +658,7 @@ def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None,
 
         wave_list = wave_axis_arr[scan]
         
-        for wv in range(6):
+        for wv in range(len(wave_list)):
 
             v = wave_list[wv]
 
@@ -1862,14 +1864,15 @@ def write_out_intermediate(data_int, hdr_interm, history_str, scan, root_scan_na
         hdu_list.writeto(out_dir + root_scan_name + f'_{suffix}.fits', overwrite=True)
 
         
-def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, TemperatureCorrection = False, level = 'CAL2', version = 'V01', out_dir = None):   
+def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, TemperatureCorrection = False, TemperatureConstant = 36.46e-3, level = 'CAL2', version = 'V01', out_dir = None):   
     # from sophi_hrt_pipe.processes import apply_field_stop, hot_pixel_mask
     PD, h = get_data(data_f,True,True,True)
     
     start_row = int(h['PXBEG2']-1)
     start_col = int(h['PXBEG1']-1)
     data_size = PD.shape[1:]
-    
+    nfocus = PD.shape[0]
+
     rows = slice(start_row,start_row + data_size[0])
     cols = slice(start_col,start_col + data_size[1])
 
@@ -1901,18 +1904,19 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
     
         tunning_constant = 0.0003513 # this shouldn't change
         # temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
-        temperature_constant_new = 36.46e-3 # value from HSref_wavelength = 6173.341 # this shouldn't change
+        # temperature_constant_new = 36.46e-3 # value from HSref_wavelength = 6173.341 # this shouldn't change
+        ref_wavelength = 6173.341
         Tfg = h['FGH_TSP1']
         Volt = fits.open(data_f)[3].data['PHI_FG_voltage'][0]
         if TemperatureCorrection:
-            wl = Volt * tunning_constant + ref_wavelength + temperature_constant_new*(Tfg-61)
+            wl = Volt * tunning_constant + ref_wavelength + TemperatureConstant*(Tfg-61)
         else:
             wl = Volt * tunning_constant + ref_wavelength
-        fakePD = np.zeros((data_size[0],data_size[1],4,6,1)); fakePD[:,:,0,:,0] = np.moveaxis(PD.copy(),0,-1);
+        fakePD = np.zeros((data_size[0],data_size[1],4,nfocus,1)); fakePD[:,:,0,:,0] = np.moveaxis(PD.copy(),0,-1);
         # voltagesData_arr = [np.asarray([Volt,Volt,Volt,Volt,Volt,Volt])]
-        wlData_arr = [np.asarray([wl,wl,wl,wl,wl,wl])]
-        fakePD = prefilter_correction(fakePD,wlData_arr,prefilter[rows,cols],None,True)
-        PD = np.squeeze(np.moveaxis(fakePD[:,:,0,:2,0],2,0))
+        wlData_arr = [np.ones(nfocus)*wl]
+        fakePD = prefilter_correction(fakePD,wlData_arr,prefilter[rows,cols],None,TemperatureCorrection,TemperatureConstant)
+        PD = np.squeeze(np.moveaxis(fakePD[:,:,0,:,0],2,0))
         
     
     # Voltage is 850, same as the continuum in the observations on the same day
@@ -1928,7 +1932,7 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         
         F = compare_IMGDIRX(F,True,'YES',header_flatdirx_exists,flatdirx_flipped)
         F = stokes_reshape(F)
-        wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True,TemperatureCorrection=TemperatureCorrection)
+        wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)
 
         if norm_f:
             F = F/F[slice(1024-256,1024+256),slice(1024-256,1024+256)].mean(axis=(0,1))[np.newaxis,np.newaxis]
@@ -2056,7 +2060,7 @@ def SCGravitationalRedshift(hdr):
     
     return vg
 
-def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True,prefilter_f=None,solar_rotation=True):
+def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True, TemperatureConstant = 36.46e-3,prefilter_f=None,solar_rotation=True):
     """
     Cavity Map computation from flat field.
     This function returns the Cavity errors in \AA at each polarimetric modulation.
@@ -2067,6 +2071,7 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True,pr
     out_name: name of the output file. If None, no output file is saved. Header from the parent flat field + some changes (Default: None)
     nc (int): number of cores to be used for parallel computing (Default: 32)
     TemperatureCorrection (bool): if True, wavelengths are corrected for the etalon temperature (Default: True)
+    TemperatureConstant (float): value of the temperature tuning constant to be used when TemperatureConstant is True (Default: 36.46e-3 mA/K)
     prefilter_f: file name of the prefilter. If None, no prefilter correction is applied (Default: None)
     solar_rotation (bool): if True, Doppler shift due to solar rotation is removed from the cavity (Default: True)
     
@@ -2168,7 +2173,7 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True,pr
     hh = fits.open(filen)
     idx = np.where(hh[8].data['PHI_PROC_operation']=='PROC_MEAN')[0]+1
     values = hh[8].data['PHI_PROC_scalar1'][idx]*0.125
-    wl, v, _, cpos = fits_get_sampling(filen,TemperatureCorrection = TemperatureCorrection, verbose=False)
+    wl, v, _, cpos = fits_get_sampling(filen,TemperatureCorrection = TemperatureCorrection, TemperatureConstant=TemperatureConstant, verbose=False)
     if cpos == 0:
         values /= values[:4].mean()
     else:
@@ -2180,7 +2185,7 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True,pr
     if prefilter_f is not None:
         print("Prefilter correction")
         prefilter = fits.getdata(prefilter_f)[:,::-1]
-        flat = prefilter_correction(flat.copy()[...,np.newaxis],[wl],prefilter,TemperatureCorrection=TemperatureCorrection)[...,0]
+        flat = prefilter_correction(flat.copy()[...,np.newaxis],[wl],prefilter,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)[...,0]
     
     CM = np.zeros((4,flat.shape[0],flat.shape[1]))
     for p in range(4):

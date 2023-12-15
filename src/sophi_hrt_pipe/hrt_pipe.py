@@ -155,6 +155,8 @@ def phihrt_pipe(input_json_file):
             TemperatureCorrection = False
         else:
             TemperatureCorrection = input_dict['TemperatureCorrection']
+        if 'TemperatureConstant' not in input_dict:
+            TemperatureConstant = 36.46e-3
         norm_f = input_dict['norm_f']
         clean_f = input_dict['clean_f']
         if clean_f:
@@ -271,10 +273,43 @@ def phihrt_pipe(input_json_file):
         for scan in range(number_of_scans):
             data_arr[scan], hdr_arr[scan] = get_data(data_f[scan], scaling = accum_scaling, bit_convert_scale = bit_conversion, scale_data = scale_data)
 
-            wave_axis_arr[scan], voltagesData_arr[scan], tuning_constant_arr[scan], cpos_arr[scan] = fits_get_sampling(data_f[scan], TemperatureCorrection = TemperatureCorrection, verbose = True)
+            wave_axis_arr[scan], voltagesData_arr[scan], tuning_constant_arr[scan], cpos_arr[scan] = fits_get_sampling(data_f[scan], TemperatureCorrection = TemperatureCorrection, TemperatureConstant = TemperatureConstant, verbose = True)
 
             if 'IMGDIRX' in hdr_arr[scan] and hdr_arr[scan]['IMGDIRX'] == 'YES':
                 print(f"This scan has been flipped in the Y axis to conform to orientation standards. \n File: {data_f[scan]}")
+
+            # add wavelength keywords
+            previousKey = 'WAVEMAX'
+            for i in range(6):
+                newKey = f'WAVE{i+1}'
+                hdr_arr[scan].set(newKey, round(wave_axis_arr[scan][i],3), f'[Angstrom] {i+1}. wavelength of observation', after=previousKey)
+                previousKey = newKey
+            # add voltage keywords
+            for i in range(6):
+                newKey = f'VOLTAGE{i+1}'
+                hdr_arr[scan].set(newKey, int(voltagesData_arr[scan][i]), f'[Volt] {i+1}. voltage of observation', after=previousKey)
+                previousKey = newKey
+            # add continuum position keywords
+            newKey = 'CONTPOS'
+            hdr_arr[scan].set(newKey, int(cpos_arr[scan]+1), 'continuum position (1: blue, 6: red)', after=previousKey)
+            previousKey = newKey
+            # add voltage tuning constant keywords
+            newKey = 'TUNCONS'
+            hdr_arr[scan].set(newKey, tuning_constant_arr[scan], f'[mAngstrom / Volt] voltage tuning constant', after=previousKey)
+            previousKey = newKey
+            # add temperature tuning constant keywords
+            newKey = 'TEMPCONS'
+            if TemperatureCorrection:
+                hdr_arr[scan].set(newKey, TemperatureConstant, '[mAngstrom / Kelvin] temperature constant', after=previousKey)
+            else:
+                hdr_arr[scan].set(newKey, 0, '[mAngstrom / Kelvin] temperature constant', after=previousKey)
+            previousKey = newKey
+
+            # change NAXIS1, 2, WAVEMIN, and MAX comments
+            hdr_arr[scan].comments['NAXIS1'] = 'number of pixels on the x axis'
+            hdr_arr[scan].comments['NAXIS2'] = 'number of pixels on the y axis'
+            hdr_arr[scan].comments['WAVEMIN'] = '[nm] min wavelength of observation'
+            hdr_arr[scan].comments['WAVEMAX'] = '[nm] max wavelength of observation'
 
         #--------
         # check if ISS is ON or OFF
@@ -290,9 +325,15 @@ def phihrt_pipe(input_json_file):
         # change RTE parameters if ISS is off and if they were chosen automatically
         if iss_off:
             if 'weight' not in input_dict:
-                weight = np.asarray([1.,4.,5.4,4.1]) # until RSW 6
+                if 'PSF' in rte:
+                    weight = np.asarray([1.,4.7,5.6,4.])
+                else:
+                    weight = np.asarray([1.,4.,5.4,4.1]) # until RSW 6
             if 'initial_model' not in input_dict:
-                initial_model = np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]) # until RSW 6
+                if 'PSF' in rte:
+                    initial_model = np.asarray([400,30,120,2.5,0.05,.5,.01,.22,.85])
+                else:
+                    initial_model = np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]) # until RSW 6
         #--------
         # test if the scans have different sizes
         #--------
@@ -456,7 +497,7 @@ def phihrt_pipe(input_json_file):
 
     if prefilter_c:
         print(" ")
-        printc('-->>>>>>> Prefilter Correction',color=bcolors.OKGREEN)
+        printc('-->>>>>>> Prefilter Correction ON FLAT FIELD ONLY',color=bcolors.OKGREEN)
         prefilter_c = True
         start_time = time.perf_counter()
 
@@ -468,26 +509,27 @@ def phihrt_pipe(input_json_file):
             prefilter = prefilter[:,::-1]
         # prefilter = prefilter[rows,cols]
         
-        data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],TemperatureCorrection=TemperatureCorrection)
+        # data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],TemperatureCorrection=TemperatureCorrection)
         # DC 20221109 test for Smitha. PF already removed from the flat
-        wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True)
-        wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0]) 
-        flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],prefilter,TemperatureCorrection=TemperatureCorrection)[...,0]
+        if flat_c:
+            wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True)
+            wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0]) 
+            flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],prefilter,TemperatureCorrection=TemperatureCorrection)[...,0]
         # flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),imgdirx_flipped)[...,0]
         
-        for hdr in hdr_arr:
-            hdr['CAL_PRE'] = prefilter_f
+        # for hdr in hdr_arr:
+        #     hdr['CAL_PRE'] = prefilter_f
         
-        if out_intermediate:
-            data_PFc = data.copy()  # DC 20211116
+        # if out_intermediate:
+        #     data_PFc = data.copy()  # DC 20211116
 
-        printc('--------------------------------------------------------------',bcolors.OKGREEN)
-        printc(f"------------- Prefilter correction time: {np.round(time.perf_counter() - start_time,3)} seconds",bcolors.OKGREEN)
-        printc('--------------------------------------------------------------',bcolors.OKGREEN)
+        # printc('--------------------------------------------------------------',bcolors.OKGREEN)
+        # printc(f"------------- Prefilter correction time: {np.round(time.perf_counter() - start_time,3)} seconds",bcolors.OKGREEN)
+        # printc('--------------------------------------------------------------',bcolors.OKGREEN)
 
     else:
         print(" ")
-        printc('-->>>>>>> No prefilter mode',color=bcolors.WARNING)
+        # printc('-->>>>>>> No prefilter mode',color=bcolors.WARNING)
         prefilter_c = False
 
     #-----------------
@@ -565,6 +607,42 @@ def phihrt_pipe(input_json_file):
     else:
         print(" ")
         printc('-->>>>>>> No flat field correction mode',color=bcolors.WARNING)
+
+    if prefilter_c:
+        print(" ")
+        printc('-->>>>>>> Prefilter Correction On Data AFTER FLAT FIELDING',color=bcolors.OKGREEN)
+        # prefilter_c = True
+        start_time = time.perf_counter()
+
+        # data = prefilter_correction(data,wave_axis_arr,rows,cols,imgdirx_flipped)
+
+        # prefilter, _ = load_fits(prefilter_f)
+        # if imgdirx_flipped == 'YES':
+        #     print('Flipping prefilter on the Y axis')
+        #     prefilter = prefilter[:,::-1]
+        # prefilter = prefilter[rows,cols]
+        
+        data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],TemperatureCorrection=TemperatureCorrection)
+        # DC 20221109 test for Smitha. PF already removed from the flat
+        # wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True)
+        # wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0]) 
+        # flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],prefilter,TemperatureCorrection=TemperatureCorrection)[...,0]
+        # flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),imgdirx_flipped)[...,0]
+        
+        for hdr in hdr_arr:
+            hdr['CAL_PRE'] = prefilter_f
+        
+        if out_intermediate:
+            data_PFc = data.copy()  # DC 20211116
+
+        printc('--------------------------------------------------------------',bcolors.OKGREEN)
+        printc(f"------------- Prefilter correction time: {np.round(time.perf_counter() - start_time,3)} seconds",bcolors.OKGREEN)
+        printc('--------------------------------------------------------------',bcolors.OKGREEN)
+
+    else:
+        print(" ")
+        printc('-->>>>>>> No prefilter mode',color=bcolors.WARNING)
+        prefilter_c = False
 
     #-----------------
     # FIELD STOP 
@@ -804,7 +882,7 @@ def phihrt_pipe(input_json_file):
         printc(f"------------- I -> Q,U,V cross talk correction time: {np.round(time.perf_counter() - start_time,3)} seconds ",bcolors.OKGREEN)
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
         
-        if not iss_off or not PSFstokes:
+        if (not iss_off or not PSFstokes) and fs_c:
             data *= field_stop[rows,cols, np.newaxis, np.newaxis, np.newaxis]
 
     else:
@@ -844,7 +922,7 @@ def phihrt_pipe(input_json_file):
             printc(f"------------- V -> Q,U cross talk correction time: {np.round(time.perf_counter() - start_time,3)} seconds ",bcolors.OKGREEN)
             printc('--------------------------------------------------------------',bcolors.OKGREEN)
         
-        if not iss_off or not PSFstokes:
+        if (not iss_off or not PSFstokes) and fs_c:
             data *= field_stop[rows,cols, np.newaxis, np.newaxis, np.newaxis]
 
     else:
@@ -1030,8 +1108,11 @@ def phihrt_pipe(input_json_file):
                 tmp = data[:,:,:,:,count].astype(np.float32)
                 hdu_list[0].data = np.moveaxis(tmp, [-1,-2], [0,1]) #want, 6,4,y,x to be consistent with FDT
                 hdu_list[0].header = hdr_arr[count] #update the calibration keywords
+                hdu_list[0].header.comments['NAXIS3'] = 'number of Stokes parameters (I, Q, U, V)'
+                hdu_list[0].header.comments['NAXIS4'] = 'number of sampled wavelengths'
                 hdu_list.writeto(out_dir + stokes_file, overwrite=True)  
-        
+            # hdu_list[0].header.set('NAXIS3',data.shape[2],'number of Stokes parameters (I, Q, U, V)',after='NAXIS2')
+            # hdu_list[0].header.set('NAXIS4',data.shape[3],'number of sampled wavelengths','NAXIS3')
     else:
         print(" ")
         #check if already defined by input, otherwise generate
