@@ -1,11 +1,9 @@
 import numpy as np
 from scipy.ndimage import gaussian_filter
-from operator import itemgetter
 from sophi_hrt_pipe.utils import *
 import os
 import time
 import cv2
-
 
 def setup_header(hdr_arr):
     """Add calibration keywords to header
@@ -873,6 +871,7 @@ def crosstalk_2D_ItoQUV(data: np.ndarray,
         if full_verbose:
             st = 0
             w = 5
+            plt.figure(layout='tight')
             plt.imshow(masked)
             plt.show()
             plt.imshow(input[w,st,:,:])
@@ -1658,6 +1657,7 @@ def polarimetric_registration(data, sly, slx, hdr_arr):
     hdr_arr: ndarray
         header array with updated CAL_PREG keyword
     """
+
     pn = 4 
     wln = 6 
     # iterations = 3
@@ -1724,6 +1724,7 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr):
     hdr_arr: ndarray
         header array with updated CAL_WREG keyword
     """
+
     pn = 4
     wln = 6
     

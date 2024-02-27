@@ -8,10 +8,8 @@ from datetime import datetime as dt
 import datetime
 import time
 
-from astropy.constants import c, R_sun
 from scipy.ndimage import map_coordinates
 from astropy import units as u
-from astropy.coordinates import SkyCoord
 from astropy.wcs import WCS
 
 class bcolors:
@@ -845,7 +843,7 @@ def limb_side_finder(img, hdr,verbose=True,outfinder=False):
         return side, center, Rpix, sly, slx
 
 
-def limb_fitting(img, hdr, field_stop, verbose=True):
+def limb_fitting(img, hdr, field_stop, verbose=True, percent=False):
     """Fits limb to the image using least squares method.
 
     Parameters
@@ -858,6 +856,8 @@ def limb_fitting(img, hdr, field_stop, verbose=True):
         field stop array
     verbose : bool, optional
         Print limb fitting results, by default True
+    percent : bool, optional
+        return mask with 90% of the readius, by default False
 
     Returns
     -------
@@ -980,11 +980,19 @@ def limb_fitting(img, hdr, field_stop, verbose=True):
                               bounds = ([center[0]-150,center[1]-150,Rpix-50],[center[0]+150,center[1]+150,Rpix+50]))
         
     mask100 = circular_mask(img.shape[0],img.shape[1],[p.x[0],p.x[1]],p.x[2])
+
+    mask96 = circular_mask(img.shape[0],img.shape[1],[p.x[0],p.x[1]],p.x[2]*.96)
     
     if 'N' in side or 'S' in side:
-        return np.moveaxis(mask100,0,1), sly, slx, side
+        if percent:
+            return np.moveaxis(mask100,0,1), sly, slx, side, np.moveaxis(mask96,0,1)
+        else:
+            return np.moveaxis(mask100,0,1), sly, slx, side
     else:
-        return mask100, sly, slx, side
+        if percent:
+            return mask100, sly, slx, side, mask96
+        else:
+            return mask100, sly, slx, side
 
 def fft_shift(img,shift):
     """Shift an image in the Fourier domain and return the shifted image (non fourier domain)
@@ -1802,7 +1810,7 @@ def subregion_selection(ht,start_row,start_col,original_shape,dsmax = 512,edge =
     
     return sly, slx
 
-def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False):
+def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45'):
     """
     Script to download the HMI m_45 or ic_45 cosest in time to the provided SO/PHI observation.
     TAI convention and light travel time are taken into consideration.
@@ -1828,7 +1836,16 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False):
     if type(t_obs) == str:
         t_obs = datetime.datetime.fromisoformat(t_obs)
     dtai = datetime.timedelta(seconds=37) # datetime.timedelta(seconds=94)
-    dcad = datetime.timedelta(seconds=35) # half HMI cadence (23) + margin
+    
+    if type(cad) != str:
+        cad = str(int(cad))
+    if cad == '45':
+        dcad = datetime.timedelta(seconds=35) # half HMI cadence (23) + margin
+    elif cad == '720':
+        dcad = datetime.timedelta(seconds=360+60) # half HMI cadence (23) + margin
+    else:
+        print('wrong HMI cadence, only 45 and 720 are accepted')
+        return None
     
     dltt = datetime.timedelta(seconds=ht['EAR_TDEL']) # difference in light travel time S/C-Earth
 
@@ -1837,13 +1854,13 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False):
     client = drms.Client(email=jsoc_email, verbose=True) 
 
     if ht['BTYPE'] == 'BLOS':
-        keys = client.query('hmi.m_45s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
+        keys = client.query('hmi.m_'+cad+'s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
                            (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
     elif ht['BTYPE'] == 'VLOS':
-        keys = client.query('hmi.v_45s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
+        keys = client.query('hmi.v_'+cad+'s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
                            (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
     else:
-        keys = client.query('hmi.ic_45s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
+        keys = client.query('hmi.ic_'+cad+'s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
                            (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
 
     lt = (np.mean(keys['DSUN_OBS'])*u.m - ht['DSUN_OBS']*u.m)/c
@@ -1854,13 +1871,13 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False):
     ind = np.argmin(T_OBS)
 
     if ht['BTYPE'] == 'BLOS':
-        name_h = 'hmi.m_45s['+keys['T_REC'][ind]+']{Magnetogram}'
-    if ht['BTYPE'] == 'VLOS':
-        name_h = 'hmi.v_45s['+keys['T_REC'][ind]+']{Dopplergram}'
+        name_h = 'hmi.m_'+cad+'s['+keys['T_REC'][ind]+']{Magnetogram}'
+    elif ht['BTYPE'] == 'VLOS':
+        name_h = 'hmi.v_'+cad+'s['+keys['T_REC'][ind]+']{Dopplergram}'
     else:
-        name_h = 'hmi.ic_45s['+keys['T_REC'][ind]+']{Continuum}'
+        name_h = 'hmi.ic_'+cad+'s['+keys['T_REC'][ind]+']{Continuum}'
 
-    if np.abs((datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds()) > 23:
+    if np.abs((datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds()) > np.ceil(int(cad)/2):
         print('WARNING: Closer file exists but has not been found.')
         print(name_h)
         print('T_OBS:',datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
@@ -1880,6 +1897,7 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False):
         return hmi_map, cache_dir, hmi_name
     else:
         return hmi_map
+
 
 def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undistortion = False, logpol=False, allDID=False,verbose=False, deriv = True, values_only = False):
     """This function saves new version of the fits file with updated WCS.
@@ -1923,10 +1941,9 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
     """
     import sunpy, imreg_dft
     import sunpy.map
-    from reproject import reproject_interp, reproject_adaptive
-    from sunpy.coordinates import get_body_heliographic_stonyhurst
-    from astropy.constants import c
-
+    # from reproject import reproject_interp, reproject_adaptive
+    # from sunpy.coordinates import get_body_heliographic_stonyhurst
+    
     from sunpy.coordinates import frames
     import warnings, sunpy
     warnings.filterwarnings("ignore", category=sunpy.util.SunpyMetadataWarning)
@@ -2708,6 +2725,7 @@ def plot_l2_pdf(path,did,version=None):
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
     import glob
+    from matplotlib.colors import LinearSegmentedColormap
     # import os
     # import re
     # from argparse import ArgumentParser
@@ -2722,9 +2740,13 @@ def plot_l2_pdf(path,did,version=None):
     plt.rcParams['xtick.direction'] = 'in'
     plt.rcParams['ytick.direction'] = 'in'
     plt.rcParams['image.cmap'] = 'gist_heat'
+    plt.rcParams['image.interpolation'] = 'none'
 
-    import sunpy.visualization.colormaps
     import cmasher as cmr
+
+    pipe_dir = os.path.realpath(__file__)
+    pipe_dir = pipe_dir.split('src/')[0]
+    hmimag = LinearSegmentedColormap.from_list('hmimag', np.loadtxt(pipe_dir+'csv/hmimag.csv',delimiter=','), N=256)
 
     file_n = os.listdir(path)
     if type(did) != str:
@@ -2787,7 +2809,7 @@ def plot_l2_pdf(path,did,version=None):
 
     # Continuum intensity
     ax = axs[0, 0]
-    im = ax.imshow(dat['icnt'], cmap='gist_heat', vmin=0.2, vmax=1.2,interpolation=None)
+    im = ax.imshow(dat['icnt'], cmap='gist_heat', vmin=0.2, vmax=1.2,interpolation='none')
     dataset_colorbar(ax,im,"right")
     ax.set_title('Continuum intensity')
 
@@ -2795,31 +2817,31 @@ def plot_l2_pdf(path,did,version=None):
     ax = axs[0, 1]
     shape = dat['vlos'].shape
     avg = dat['vlos'][int(shape[0]//4):-int(shape[0]//4),int(shape[1]//4):-int(shape[1]//4)].mean()
-    im = ax.imshow(dat['vlos'], cmap=cmr.fusion.reversed(), vmin=-2+avg, vmax=2+avg,interpolation=None)
+    im = ax.imshow(dat['vlos'], cmap=cmr.fusion.reversed(), vmin=-2+avg, vmax=2+avg,interpolation='none')
     dataset_colorbar(ax,im,"right", label='km/s')
     ax.set_title('LoS velocity')
 
     # BLOS
     ax = axs[0, 2]
-    im = ax.imshow(dat['blos'], cmap='hmimag', vmin=-1500, vmax=1500,interpolation=None)
+    im = ax.imshow(dat['blos'], cmap=hmimag, vmin=-1500, vmax=1500,interpolation='none')
     dataset_colorbar(ax,im,"right", label='G')
     ax.set_title('LoS magnetic field')
 
     # B inclination
     ax = axs[1, 0]
-    im = ax.imshow(dat['binc'], cmap=cmr.fusion, vmin=0, vmax=180,interpolation=None)
+    im = ax.imshow(dat['binc'], cmap=cmr.fusion, vmin=0, vmax=180,interpolation='none')
     dataset_colorbar(ax,im,"right", label='°')
     ax.set_title('Magn. field inclination')
 
     # B
     ax = axs[1, 1]
-    im = ax.imshow(dat['bmag'], cmap='gnuplot_r', vmin=0, vmax=1000,interpolation=None)
+    im = ax.imshow(dat['bmag'], cmap='gnuplot_r', vmin=0, vmax=1000,interpolation='none')
     dataset_colorbar(ax,im,"right", label='G')
     ax.set_title('Magn. field strength')
 
     # B azimuth
     ax = axs[1, 2]
-    im = ax.imshow(dat['bazi'], cmap='hsv', vmin=0, vmax=180,interpolation=None)
+    im = ax.imshow(dat['bazi'], cmap='hsv', vmin=0, vmax=180,interpolation='none')
     dataset_colorbar(ax,im,"right", label='°')
     ax.set_title('Magn. field azimuth')
 
@@ -2843,7 +2865,7 @@ def plot_l2_pdf(path,did,version=None):
 
     # Chisq
     ax = axs[0,0]
-    im = ax.imshow(dat['chi2'], cmap='turbo', vmin=0, vmax=100,interpolation=None)
+    im = ax.imshow(dat['chi2'], cmap='turbo', vmin=0, vmax=100,interpolation='none')
     dataset_colorbar(ax,im,"right")
     ax.set_title('$\chi^2$')
 

@@ -1,15 +1,11 @@
-from posix import listdir
 import numpy as np 
 import os.path
 from astropy.io import fits
 import time
 import datetime
-from operator import itemgetter
 import json
-import matplotlib.pyplot as plt
 from numpy.core.numeric import True_
 from scipy.ndimage import binary_dilation, binary_erosion, generate_binary_structure
-import cv2
 
 from sophi_hrt_pipe.utils import *
 from sophi_hrt_pipe.processes import *
@@ -115,7 +111,7 @@ def phihrt_pipe(input_json_file):
     SPGYlib
 
     '''
-    version = 'V1.8.1 September 4th 2023'
+    version = 'V1.8.2 February 27th 2024'
 
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
     printc('PHI HRT data reduction software  ',bcolors.OKGREEN)
@@ -157,6 +153,8 @@ def phihrt_pipe(input_json_file):
             TemperatureCorrection = input_dict['TemperatureCorrection']
         if 'TemperatureConstant' not in input_dict:
             TemperatureConstant = 36.46e-3
+        else:
+            TemperatureConstant = input_dict['TemperatureConstant']
         norm_f = input_dict['norm_f']
         clean_f = input_dict['clean_f']
         if clean_f:
@@ -186,28 +184,29 @@ def phihrt_pipe(input_json_file):
             cavity_f = input_dict['cavity_f']
         else:
             cavity_f = None
-        rte = input_dict['rte']
+        # rte = input_dict['rte']
         out_intermediate = input_dict['out_intermediate']  #20211116
-        pymilos_opt = input_dict['pymilos']
+        # pymilos_opt = input_dict['pymilos']
         
+        RTE_options = input_dict["RTE"]
         # inputs for RTE inversions. Last update of the values: 2023-09-04
-        if 'weight' in input_dict:
-            weight = np.asarray(input_dict['weight'])
-        else:
-            if 'PSF' in rte:
-                weight = np.asarray([1.,3.8,4.1,3.6]) # with spectral PSF
-            else:
-                weight = np.asarray([1.,3.5,4.,3.5]) # OK without spectral PSF
-            # if iss_off:
-            #     weight = np.asarray([1.,4.,5.4,4.1]) # until RSW 6
+        # if RTE_options['weight'] is not None:
+        #     RTE_options['weight'] = np.asarray(input_dict['weight'])
+        # else:
+        #     if 'PSF' in RTE_options['rte']:
+        #         RTE_options['weight'] = np.asarray([1.,3.8,4.1,3.6]) # with spectral PSF
+        #     else:
+        #         RTE_options['weight'] = np.asarray([1.,3.5,4.,3.5]) # OK without spectral PSF
+        #     # if iss_off:
+        #     #     weight = np.asarray([1.,4.,5.4,4.1]) # until RSW 6
 
-        if 'initial_model' in input_dict:
-            initial_model = np.asarray(input_dict['initial_model'])
-        else:
-            if 'PSF' in rte:
-                initial_model = np.asarray([400,30,120,1.,0.03,0.05,.01,.2,.8]) # with spectral PSF
-            else:
-                initial_model = np.asarray([400,30,120,14.,0.06,0.05,.5,.25,.75]) # OK without spectral PSF
+        # if RTE_options['initial_model'] is not None:
+        #     RTE_options['initial_model'] = np.asarray(input_dict['initial_model'])
+        # else:
+        #     if 'PSF' in RTE_options['rte']:
+        #         RTE_options['initial_model'] = np.asarray([400,30,120,1.,0.03,0.05,.01,.2,.8]) # with spectral PSF
+        #     else:
+        #         RTE_options['initial_model'] = np.asarray([400,30,120,14.,0.06,0.05,.5,.25,.75]) # OK without spectral PSF
             # if iss_off:
             #     initial_model = np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]) # until RSW 6
     
@@ -308,8 +307,8 @@ def phihrt_pipe(input_json_file):
             # change NAXIS1, 2, WAVEMIN, and MAX comments
             hdr_arr[scan].comments['NAXIS1'] = 'number of pixels on the x axis'
             hdr_arr[scan].comments['NAXIS2'] = 'number of pixels on the y axis'
-            hdr_arr[scan].comments['WAVEMIN'] = '[nm] min wavelength of observation'
-            hdr_arr[scan].comments['WAVEMAX'] = '[nm] max wavelength of observation'
+            # hdr_arr[scan].comments['WAVEMIN'] = '[nm] min wavelength of observation'
+            # hdr_arr[scan].comments['WAVEMAX'] = '[nm] max wavelength of observation'
 
         #--------
         # check if ISS is ON or OFF
@@ -323,17 +322,30 @@ def phihrt_pipe(input_json_file):
                 iss_off = False
                 printc('-->>>>>>> ISS is ON',color=bcolors.OKGREEN) 
         # change RTE parameters if ISS is off and if they were chosen automatically
-        if iss_off:
-            if 'weight' not in input_dict:
-                if 'PSF' in rte:
-                    weight = np.asarray([1.,4.7,5.6,4.])
+        if RTE_options['weight'] is None:
+            if iss_off:
+                if 'PSF' in RTE_options['rte']:
+                    RTE_options['weight'] = [1.,4.7,5.6,4.]
                 else:
-                    weight = np.asarray([1.,4.,5.4,4.1]) # until RSW 6
-            if 'initial_model' not in input_dict:
-                if 'PSF' in rte:
-                    initial_model = np.asarray([400,30,120,2.5,0.05,.5,.01,.22,.85])
+                    RTE_options['weight'] = [1.,4.,5.4,4.1] # until RSW 6
+            else:
+                if 'PSF' in RTE_options['rte']:
+                    RTE_options['weight'] = [1.,3.8,4.1,3.6] # with spectral PSF
                 else:
-                    initial_model = np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]) # until RSW 6
+                    RTE_options['weight'] = [1.,3.5,4.,3.5] # OK without spectral PSF
+        
+        if RTE_options['initial_model'] is None:
+            if iss_off:
+                if 'PSF' in RTE_options['rte']:
+                    RTE_options['initial_model'] = [400,30,120,2.5,0.05,.5,.01,.22,.85]
+                else:
+                    RTE_options['initial_model'] = [400,30,120,1,0.05,1.5,.01,.22,.85] # until RSW 6
+            else:
+                if 'PSF' in RTE_options['rte']:
+                    RTE_options['initial_model'] = [400,30,120,1.,0.03,0.05,.01,.2,.8] # with spectral PSF
+                else:
+                    RTE_options['initial_model'] = [400,30,120,14.,0.06,0.05,.5,.25,.75] # OK without spectral PSF
+
         #--------
         # test if the scans have different sizes
         #--------
@@ -754,15 +766,17 @@ def phihrt_pipe(input_json_file):
         AR_mask = np.zeros((data_size[0],data_size[1],data_shape[-1]),dtype=bool)
         I_c = np.ones(data_shape[-1])
         limb_mask = np.ones((data_size[0],data_size[1],data_shape[-1]))
+        limb_percent_mask = np.zeros((data_size[0],data_size[1],data_shape[-1]))
+        limb_percent_mask[32:-32,32:-32] = 1
         limb = False
         
         for scan in range(data_shape[-1]):
            
             try:
-                limb_temp, sly, slx, side = limb_fitting(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols])
+                limb_temp, sly, slx, side, limb_percent_temp = limb_fitting(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],percent=True)
                 
                 if limb_temp is not None:
-                    #get region of pixels for norm, which are on for certain on disc
+                    #get region of pixels for norm, which are for certain on disc
                     Ic_temp = np.zeros((data_size[0],data_size[1]))
                     Ic_temp[sly,slx] = 1
                     Ic_temp *= field_stop[rows,cols]
@@ -771,6 +785,8 @@ def phihrt_pipe(input_json_file):
                     #for use later in the RTE
                     limb_temp = np.where(limb_temp>0,1,0)
                     limb_mask[...,scan] = limb_temp 
+                    limb_percent_temp = np.where(limb_percent_temp>0,1,0)
+                    limb_percent_mask[...,scan] = limb_percent_temp 
                     limb = True
                    
                 else:
@@ -788,6 +804,7 @@ def phihrt_pipe(input_json_file):
             if fs_c:
                 Ic_temp *= field_stop[rows,cols]
                 limb_mask *= field_stop[rows,cols,np.newaxis]
+                limb_percent_mask *= field_stop[rows,cols,np.newaxis]
             Ic_temp = np.array(Ic_temp, dtype=bool)
             
             ##################################################################
@@ -850,7 +867,7 @@ def phihrt_pipe(input_json_file):
             
             cQ, cU, cV, sfitQ, sfitU, sfitV, data[...,scan] = crosstalk_2D_ItoQUV(data[...,scan],
                                                                                   False,
-                                                                                  limb_mask[...,scan],
+                                                                                  limb_percent_mask[...,scan],
                                                                                   mode=CTmode,
                                                                                   threshold = .5,
                                                                                   divisions = 16,
@@ -984,6 +1001,25 @@ def phihrt_pipe(input_json_file):
     data[np.isinf(data)] = 0
     data[np.isnan(data)] = 0
 
+
+    #-----------------
+    # SET MEDIAN TO ZERO
+    #-----------------
+
+    # if norm_stokes:
+    #     print(" ")
+    #     printc('-->>>>>>> Set Median to 0',color=bcolors.OKGREEN)
+    #     for scan in range(data_shape[-1]):
+    #         maski = limb_mask[...,scan] * AR_mask[...,scan]
+    #         for l in range(data_shape[3]):
+    #                 PQm = np.median(data[maski>0,1,l,scan])
+    #                 PUm = np.median(data[maski>0,2,l,scan])
+    #                 PVm = np.median(data[maski>0,3,l,scan])
+
+    #                 data[:,:,1,l,scan] -= PQm
+    #                 data[:,:,2,l,scan] -= PUm
+    #                 data[:,:,3,l,scan] -= PVm
+                    
     #-----------------
     # WRITE OUT STOKES VECTOR
     #-----------------
@@ -1123,7 +1159,7 @@ def phihrt_pipe(input_json_file):
     # INVERSION OF DATA WITH CMILOS
     #-----------------
 
-    if rte in {"RTE","CE","CE+RTE","RTE+PSF","CE+RTE+PSF"}:
+    if RTE_options['rte'] in {"RTE","CE","CE+RTE","RTE+PSF","CE+RTE+PSF"}:
         #check out_dir has "/" character
         if out_dir[-1] != "/":
             print("Desired Output directory missing / character, will be added")
@@ -1138,19 +1174,16 @@ def phihrt_pipe(input_json_file):
             data = np.mean(data, axis = (-1))
             data_shape = (data_size[0], data_size[1], 1)
 
-        if pymilos_opt:
-            RTE_code = 'pymilos' # it will become an input in the json (DEFAULT: 'pymilos')
-        else:
-            RTE_code = 'cmilos'
-        options = []
+        # if pymilos_opt:
+        #     RTE_code = 'pymilos' # it will become an input in the json (DEFAULT: 'pymilos')
+        # else:
+        #     RTE_code = 'cmilos'
+        # options = []
 
         generate_l2(data_f, hdr_arr, wave_axis_arr, cpos_arr, 
-                    data, RTE_code, rte, 
-                    mask, imgdirx_flipped, out_rte_filename, out_dir, 
-                    cavity_f, rows, cols, vers = vrs,
-                    options = options,
-                    weight = weight,
-                    initial_model = initial_model)
+                    data, mask, imgdirx_flipped, out_rte_filename, out_dir, 
+                    cavity_f, rows, cols, vrs,
+                    **RTE_options)
                     
         # if pymilos_opt:
         #     #weight = np.asarray([1.,4.,5.4,4.1]); initial_model = np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85])

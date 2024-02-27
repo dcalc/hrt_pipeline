@@ -6,7 +6,7 @@ import os
 import time
 import subprocess
 import datetime
-import pymilos
+import milos as pym
 
 def create_output_filenames(filename, DID, version = '01',gzip = False):
     """Creating the L2 output filenames from the input file, which is assumed to be L1
@@ -59,8 +59,9 @@ def create_output_filenames(filename, DID, version = '01',gzip = False):
     blos_file = versioned.replace('ilam', 'blos')
     vlos_file = versioned.replace('ilam', 'vlos')
     chi2_file = versioned.replace('ilam', 'chi2')
+    fullmodel_file = versioned.replace('ilam', 'FullModel')
     
-    return stokes_file, icnt_file, bmag_file, bazi_file, binc_file, blos_file, vlos_file, chi2_file
+    return stokes_file, icnt_file, bmag_file, bazi_file, binc_file, blos_file, vlos_file, chi2_file,fullmodel_file
 
 
 def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir, out_rte_filename, vers):
@@ -88,12 +89,12 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
     None
     """
     if out_rte_filename is None:
-            filename_root = str(file_path.split('.fits')[0][-10:])
-            if ".gz" in file_path:
-                gzip = True
-            else:
-                gzip = False
-            _, icnt_file, bmag_file, bazi_file, binc_file, blos_file, vlos_file, chi2_file = create_output_filenames(file_path, filename_root, version = vers, gzip = gzip)
+        filename_root = str(file_path.split('.fits')[0][-10:])
+        if ".gz" in file_path:
+            gzip = True
+        else:
+            gzip = False
+        _, icnt_file, bmag_file, bazi_file, binc_file, blos_file, vlos_file, chi2_file, fullmodel_file = create_output_filenames(file_path, filename_root, version = vers, gzip = gzip)
 
     else:
         if isinstance(out_rte_filename, list):
@@ -106,7 +107,7 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
             filename_root = str(file_path.split('.fits')[0][-10:])
             print(f"out_rte_filename neither string nor list, reverting to default: {filename_root}")
 
-        blos_file, icnt_file, bmag_file, bazi_file, binc_file, vlos_file, chi2_file = 'blos_' + filename_root, 'icnt_' + filename_root, 'bmag_' + filename_root, 'bazi_' + filename_root, 'binc_' + filename_root, 'vlos_' + filename_root, 'chi2_' + filename_root
+        blos_file, icnt_file, bmag_file, bazi_file, binc_file, vlos_file, chi2_file, fullmodel_file = 'blos_' + filename_root, 'icnt_' + filename_root, 'bmag_' + filename_root, 'bazi_' + filename_root, 'binc_' + filename_root, 'vlos_' + filename_root, 'chi2_' + filename_root, 'FullModel_' + filename_root
 
     ntime = datetime.datetime.now()
     hdr_scan['DATE'] = ntime.strftime("%Y-%m-%dT%H:%M:%S")
@@ -128,13 +129,14 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
     rte_sw_k = hdr_scan['RTE_SW']
     rte_mod_k = hdr_scan['RTE_MOD']
 
-    with fits.open(file_path) as hdu_list:
-        hdu_list[0].header = hdr_scan
-        hdu_list[0].data = rte_data_products.astype(np.float32)
-        hdu_list.writeto(out_dir+filename_root+'_rte_data_products.fits.gz', overwrite=True)
+    # with fits.open(file_path) as hdu_list:
+    #     hdu_list[0].header = hdr_scan
+    #     hdu_list[0].data = rte_data_products.astype(np.float32)
+    #     hdu_list.writeto(out_dir+filename_root+'_rte_data_products.fits.gz', overwrite=True)
 	
     #blos
     print(blos_file)
+    im = rte_data_products[2,:,:]*np.cos(rte_data_products[3,:,:]*np.pi/180.)
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = blos_file
         # hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
@@ -142,16 +144,17 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
         hdr_scan['LEVEL'] = 'L2'
         hdr_scan['BTYPE'] = 'BLOS'
         hdr_scan['BUNIT'] = 'Gauss'
-        hdr_scan['DATAMIN'] = int(np.min(rte_data_products[5,:,:]))
-        hdr_scan['DATAMAX'] = int(np.max(rte_data_products[5,:,:]))
-        hdr_scan = data_hdr_kw(hdr_scan, rte_data_products[5,:,:])
+        hdr_scan['DATAMIN'] = int(np.min(im))
+        hdr_scan['DATAMAX'] = int(np.max(im))
+        hdr_scan = data_hdr_kw(hdr_scan, im)
 
         hdu_list[0].header = hdr_scan
-        hdu_list[0].data = rte_data_products[5,:,:].astype(np.float32)
+        hdu_list[0].data = im.astype(np.float32)
         hdu_list.writeto(out_dir+blos_file, overwrite=True)
 
     #bazi
     print(bazi_file)
+    im = rte_data_products[4,:,:]
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = bazi_file
         # hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
@@ -160,14 +163,15 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
         hdr_scan['BUNIT'] = 'Degrees'
         hdr_scan['DATAMIN'] = int(0)
         hdr_scan['DATAMAX'] = int(180)
-        hdr_scan = data_hdr_kw(hdr_scan, rte_data_products[3,:,:])
+        hdr_scan = data_hdr_kw(hdr_scan, im)
 
         hdu_list[0].header = hdr_scan
-        hdu_list[0].data = rte_data_products[3,:,:].astype(np.float32)
+        hdu_list[0].data = im.astype(np.float32)
         hdu_list.writeto(out_dir+bazi_file, overwrite=True)
 
     #binc
     print(binc_file)
+    im = rte_data_products[3,:,:]
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = binc_file
         # hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
@@ -176,14 +180,15 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
         hdr_scan['BUNIT'] = 'Degrees'
         hdr_scan['DATAMIN'] = int(0)
         hdr_scan['DATAMAX'] = int(180)
-        hdr_scan = data_hdr_kw(hdr_scan, rte_data_products[2,:,:])
+        hdr_scan = data_hdr_kw(hdr_scan, im)
 
         hdu_list[0].header = hdr_scan
-        hdu_list[0].data = rte_data_products[2,:,:].astype(np.float32)
+        hdu_list[0].data = im.astype(np.float32)
         hdu_list.writeto(out_dir+binc_file, overwrite=True)
 
     #bmag
     print(bmag_file)
+    im = rte_data_products[2,:,:]
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = bmag_file
         # hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
@@ -191,47 +196,50 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
         hdr_scan['BTYPE'] = 'BMAG'
         hdr_scan['BUNIT'] = 'Gauss'
         hdr_scan['DATAMIN'] = int(0)
-        hdr_scan['DATAMAX'] = round(np.max(rte_data_products[1,:,:]),3)
-        hdr_scan = data_hdr_kw(hdr_scan, rte_data_products[1,:,:])
+        hdr_scan['DATAMAX'] = round(np.max(im),3)
+        hdr_scan = data_hdr_kw(hdr_scan, im)
 
         hdu_list[0].header = hdr_scan
-        hdu_list[0].data = rte_data_products[1,:,:].astype(np.float32)
+        hdu_list[0].data = im.astype(np.float32)
         hdu_list.writeto(out_dir+bmag_file, overwrite=True)
 
     #vlos
     print(vlos_file)
+    im = rte_data_products[8,:,:]
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = vlos_file
         # hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
         hdr_scan['LEVEL'] = 'L2'
         hdr_scan['BTYPE'] = 'VLOS'
         hdr_scan['BUNIT'] = 'km/s'
-        hdr_scan['DATAMIN'] = round(np.min(rte_data_products[4,:,:]),6)
-        hdr_scan['DATAMAX'] = round(np.max(rte_data_products[4,:,:]),6)
-        hdr_scan = data_hdr_kw(hdr_scan, rte_data_products[4,:,:])
+        hdr_scan['DATAMIN'] = round(np.min(im),6)
+        hdr_scan['DATAMAX'] = round(np.max(im),6)
+        hdr_scan = data_hdr_kw(hdr_scan, im)
 
         hdu_list[0].header = hdr_scan
-        hdu_list[0].data = rte_data_products[4,:,:].astype(np.float32)
+        hdu_list[0].data = im.astype(np.float32)
         hdu_list.writeto(out_dir+vlos_file, overwrite=True)
     
     #chi2
     print(chi2_file)
+    im = rte_data_products[11,:,:]
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = chi2_file
         # hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
         hdr_scan['LEVEL'] = 'L2'
         hdr_scan['BTYPE'] = 'CHI2'
         hdr_scan['BUNIT'] = ' '
-        hdr_scan['DATAMIN'] = round(np.min(rte_data_products[6,:,:]),6)
-        hdr_scan['DATAMAX'] = round(np.max(rte_data_products[6,:,:]),6)
-        hdr_scan = data_hdr_kw(hdr_scan, rte_data_products[6,:,:])
+        hdr_scan['DATAMIN'] = round(np.min(im),6)
+        hdr_scan['DATAMAX'] = round(np.max(im),6)
+        hdr_scan = data_hdr_kw(hdr_scan, im)
 
         hdu_list[0].header = hdr_scan
-        hdu_list[0].data = rte_data_products[6,:,:].astype(np.float32)
+        hdu_list[0].data = im.astype(np.float32)
         hdu_list.writeto(out_dir+chi2_file, overwrite=True)
 
     #Icnt
     print(icnt_file)
+    im = rte_data_products[9,:,:] + rte_data_products[10,:,:]
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = icnt_file
         # hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
@@ -239,17 +247,32 @@ def write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir
         hdr_scan['BTYPE'] = 'ICNT'
         hdr_scan['BUNIT'] = 'Normalised Intensity'
         hdr_scan['DATAMIN'] = 0
-        hdr_scan['DATAMAX'] = round(np.max(rte_data_products[0,:,:]),6)
-        hdr_scan = data_hdr_kw(hdr_scan, rte_data_products[0,:,:])
+        hdr_scan['DATAMAX'] = round(np.max(im),6)
+        hdr_scan = data_hdr_kw(hdr_scan, im)
 
         hdu_list[0].header = hdr_scan
-        hdu_list[0].data = rte_data_products[0,:,:].astype(np.float32)
+        hdu_list[0].data = im.astype(np.float32)
         hdu_list.writeto(out_dir+icnt_file, overwrite=True)
 
+    #FullModel
+    print(fullmodel_file)
+    with fits.open(file_path) as hdu_list:
+        hdr_scan['FILENAME'] = fullmodel_file
+        # hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
+        hdr_scan['HISTORY'] = f"RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
+        hdr_scan['LEVEL'] = 'L2'
+        hdr_scan['BTYPE'] = ''
+        hdr_scan['BUNIT'] = ''
+        hdr_scan['DATAMIN'] = int(np.min(rte_data_products[2:]))
+        hdr_scan['DATAMAX'] = int(np.max(rte_data_products[2:]))
+        hdr_scan = data_hdr_kw(hdr_scan, rte_data_products[2:])
+
+        hdu_list[0].header = hdr_scan
+        hdu_list[0].data = rte_data_products.astype(np.float32)
+        hdu_list.writeto(out_dir+fullmodel_file, overwrite=True)
 
 
-
-def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, RTE_code, rte, mask, imgdirx_flipped, out_rte_filename, out_dir, cavity_f = None, rows = slice(0,2048), cols = slice(0,2048), options = [], weight=np.asarray([1.,4.,5.4,4.1]), initial_model=np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]), vers = '01'):
+def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_flipped, out_rte_filename, out_dir, cavity_f = None, rows = slice(0,2048), cols = slice(0,2048), vers = '01', rte = "CE+RTE+PSF", pymilos = True, options = [], weight=np.asarray([1.,4.,5.4,4.1]), initial_model=np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]), parallel = False, num_workers = 20):
     """Pre-process each scan and call `run_pymilos` for each scan in the data set.
     
     Parameters
@@ -292,6 +315,25 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, RTE_code, rte, ma
     None.
     """
     data_shape = data.shape # (y,x,p,l,s)
+
+    if pymilos == False:
+        CMILOS_LOC = os.path.realpath(__file__)
+
+        # CMILOS_LOC = CMILOS_LOC.split('src/')[0] + 'cmilos/' #-11 as hrt_pipe.py is 11 characters
+        CMILOS_LOC = CMILOS_LOC.split('src/')[0] + 'pymilos/' #-11 as hrt_pipe.py is 11 characters
+
+        cmd = os.path.join(CMILOS_LOC, 'milos')
+        printc('RTE on. Looking for ', cmd, bcolors.OKGREEN)
+        if os.path.isfile(cmd):
+            printc('CMILOS executable found', color=bcolors.OKBLUE)
+        else:
+            printc('Cannot find CMILOS executable', bcolors.FAIL)
+            raise FileNotFoundError
+        # cmd = fix_path(cmd)  # not needed if os.path.join is used
+    else:
+        cmd = ''
+    
+    ref_wavelength = 6173.341 # mA
     
     for scan in range(int(data_shape[-1])):
         printc(f'  ---- >>>>> Data scan number: {scan} .... ',color=bcolors.OKGREEN)
@@ -302,6 +344,18 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, RTE_code, rte, ma
         wave_axis = wve_axis_arr[scan]
         hdr_scan = hdr_arr[scan]
         
+        if cavity_f is not None:
+            printc("  ---- >>>>> Correcting wavelengths for Cavity Maps shifts: .... ",color=bcolors.OKGREEN)
+            cavity = cavity_shifts(cavity_f,wave_axis,rows,cols,False)
+        else:
+            cavity = np.empty([], dtype=float)
+
+        if cpos_arr[scan] == 0:
+            shift_w =  wave_axis[3] - ref_wavelength
+        elif cpos_arr[scan] == 5:
+            shift_w =  wave_axis[2] - ref_wavelength
+        wave_axis = wave_axis - shift_w
+        
         if data.ndim == 5:
             sdata = data[:,:,:,:,scan]
         elif data.ndim > 5 or data.ndim < 4:
@@ -310,14 +364,29 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, RTE_code, rte, ma
         elif data.ndim == 4:
             sdata = data       
         
-        rte_invs = run_milos(sdata,wave_axis,RTE_code,rte,cpos_arr[0],
-                             options=options,cavity_f=cavity_f,
-                             rows=rows,cols=cols,
-                             weight=weight,initial_model=initial_model,
-                             out_dir=out_dir) # (nout, ny, nx)
+        sdata = np.einsum('yxpl->lpyx',sdata.copy())
+        nwave, npol, ny, nx = sdata.shape
+        
+        rte_invs = pym.phi_rte(sdata.copy(),
+                 wave_axis,
+                 rte_mode=rte,
+                 temp_dir=out_dir,
+                 cmd=cmd,
+                 options=options,
+                 weight=weight,
+                 mask=mask[:,:,scan],
+                 initial_model=initial_model,
+                 cavity=cavity,
+                 parallel=parallel, num_workers=num_workers)
+
+        # rte_invs = run_milos(sdata,wave_axis,RTE_code,rte,cpos_arr[0],
+        #                      options=options,cavity_f=cavity_f,
+        #                      rows=rows,cols=cols,
+        #                      weight=weight,mask=mask,initial_model=initial_model,
+        #                      out_dir=out_dir) # (nout, ny, nx)
         # rte_invs = np.moveaxis(rte_invs,-1,0) # already in run_pymilos
 
-        rte_invs_noth = np.copy(rte_invs)
+        # rte_invs_noth = np.copy(rte_invs)
 
         """
         From 0 to 11
@@ -335,29 +404,32 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, RTE_code, rte, ma
         Minimum chisqr value
         """
 
-        noise_in_V =  np.mean(sdata[:,:,3,cpos_arr[0]]) #ellipsis in case data has 4 dimensions
-        low_values_flags = np.max(np.abs(sdata[:,:,3,:]),axis=-1) < noise_in_V  # Where values are low
+        # noise_in_V =  np.mean(sdata[:,:,3,cpos_arr[0]]) #ellipsis in case data has 4 dimensions
+        # low_values_flags = np.max(np.abs(sdata[:,:,3,:]),axis=-1) < noise_in_V  # Where values are low
         
         del sdata
 
-        rte_invs[2,low_values_flags] = 0
-        rte_invs[3,low_values_flags] = 0
-        rte_invs[4,low_values_flags] = 0
+        # rte_invs[2,low_values_flags] = 0
+        # rte_invs[3,low_values_flags] = 0
+        # rte_invs[4,low_values_flags] = 0
 
-        rte_data_products = np.zeros((7,rte_invs_noth.shape[1],rte_invs_noth.shape[2]))
+        # rte_data_products = np.zeros((7,rte_invs_noth.shape[1],rte_invs_noth.shape[2]))
 
-        rte_data_products[0,:,:] = rte_invs_noth[9,:,:] + rte_invs_noth[10,:,:] #continuum
-        rte_data_products[1,:,:] = rte_invs_noth[2,:,:] #b mag strength
-        rte_data_products[2,:,:] = rte_invs_noth[3,:,:] #inclination
-        rte_data_products[3,:,:] = rte_invs_noth[4,:,:] #azimuth
-        rte_data_products[4,:,:] = rte_invs_noth[8,:,:] #vlos
-        rte_data_products[5,:,:] = rte_invs_noth[2,:,:]*np.cos(rte_invs_noth[3,:,:]*np.pi/180.) #blos
-        rte_data_products[6,:,:] = rte_invs_noth[11,:,:] #chisq
+        # rte_data_products[0,:,:] = rte_invs_noth[9,:,:] + rte_invs_noth[10,:,:] #continuum
+        # rte_data_products[1,:,:] = rte_invs_noth[2,:,:] #b mag strength
+        # rte_data_products[2,:,:] = rte_invs_noth[3,:,:] #inclination
+        # rte_data_products[3,:,:] = rte_invs_noth[4,:,:] #azimuth
+        # rte_data_products[4,:,:] = rte_invs_noth[8,:,:] #vlos
+        # rte_data_products[5,:,:] = rte_invs_noth[2,:,:]*np.cos(rte_invs_noth[3,:,:]*np.pi/180.) #blos
+        # rte_data_products[6,:,:] = rte_invs_noth[11,:,:] #chisq
 
-        rte_data_products *= mask[np.newaxis, :, :, scan] #field stop, set outside to 0
+        rte_invs *= mask[np.newaxis, :, :, scan] #field stop, set outside to 0
 
         hdr_scan['RTE_MOD'] = rte
-        hdr_scan['RTE_SW'] = RTE_code
+        if pymilos:
+            hdr_scan['RTE_SW'] = "pymilos "+pym.__version__
+        else:
+            hdr_scan['RTE_SW'] = "milos "+pym.__version__
         if not(options):
             hdr_scan['RTE_ITER'] = str(30)
         else:
@@ -365,14 +437,16 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, RTE_code, rte, ma
         hdr_scan.set('RTE_W', str(weight), 'Polarimetric weights used in the RTE code', after='RTE_ITER')
         hdr_scan.set('RTE_INIT', str(initial_model), 'Initial model used in the RTE code', after='RTE_ITER')
 
-        write_output_inversion(rte_data_products, file_path, scan, hdr_scan, out_dir, out_rte_filename, vers)
+        write_output_inversion(rte_invs, file_path, scan, hdr_scan, out_dir, out_rte_filename, vers)
+        
+        # write_fullmodel(rte_data_products, file_path, scan, hdr_scan, out_dir, out_rte_filename, vers)
             
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
         printc(f"------------- MILOS RTE Run Time: {np.round(time.perf_counter() - start_time,3)} seconds ",bcolors.OKGREEN)
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
 
     
-def run_milos(data,wave_axis,RTE_code,rte,cpos, ref_wavelength=6173.341000, options = [],cavity_f = None, rows = slice(0,2048), cols = slice(0,2048),weight=np.asarray([1.,4.,5.4,4.1]),initial_model=np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]), out_dir = './'):
+def run_milos(data,wave_axis,RTE_code,rte,cpos, ref_wavelength=6173.341000, options = [],cavity_f = None, rows = slice(0,2048), cols = slice(0,2048),weight=np.asarray([1.,4.,5.4,4.1]),mask=0,initial_model=np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]), out_dir = './'):
     """Run RTE inversion using `pymilos`: CMILOS with python wrapper for faster I/O
     Make sure to compile pymilos, see `pymilos` documentation for more details
 
@@ -473,7 +547,7 @@ def run_milos(data,wave_axis,RTE_code,rte,cpos, ref_wavelength=6173.341000, opti
     options_set = 0
     if not(options):
         print('No input options. Setting for PHI only.')
-        options = np.zeros((7))
+        options = np.zeros((9))
         options[0] = len(wave_axis) #NLAMBDA wave axis dimension
         options[1] = 30 #MAX_ITER max number of iterations
         options[2] = 1 #CLASSICAL_ESTIMATES [0,1,2] 0=RTE, 1= CE+RTE, 2= CE
@@ -481,10 +555,13 @@ def run_milos(data,wave_axis,RTE_code,rte,cpos, ref_wavelength=6173.341000, opti
         options[4] = 0 #FWHM = atof(argv[5]);
         options[5] = 0 ##DELTA = atof(argv[6]);
         options[6] = 0 #NMUESTRAS_G = atoi(argv[7]);
+        options[7] = 0 # bad pixel check
+        options[8] = 0 # lambda parameter
+        
     else:
         options = np.array(options)
         options_set = 1
-        assert (options.size == 7)
+        assert (options.size == 9)
 
 
     """
@@ -591,7 +668,7 @@ def run_milos(data,wave_axis,RTE_code,rte,cpos, ref_wavelength=6173.341000, opti
             print('options:',options)
             print('data shape:',sdata.shape)
 
-            res = pymilos.pmilos(options, sdata, wave_axis, weight, initial_model)
+            res = pym.pymilos(options, sdata, wave_axis, weight, initial_model)
             # n_models,stokes,wave  we would need (wave, pol, y * x)
 
             #add wavelenth axis for having same behaviour as cmilos
@@ -628,44 +705,56 @@ def run_milos(data,wave_axis,RTE_code,rte,cpos, ref_wavelength=6173.341000, opti
     start_time = time.perf_counter()
     
     if cmd: # Using cmilos
-        filename = out_dir + 'dummy_in.txt'
-        wave_axis = np.broadcast_to(wave_axis, (ny, nx, nwave))
-        wave_axis = np.einsum('ijl->lij', wave_axis)
-
-        # if cavity is defined, change the wavelength pixel by pixel
-        if cavity.shape:
-            cavity = np.broadcast_to(cavity, (nwave, ny, nx))
-            wave_axis = wave_axis - cavity
-
-        with open(filename,"w") as f:
-            for i in range(nx):
-                for j in range(ny):
-                    for k in range(nwave):
-                        f.write('%e %e %e %e %e \n' % (wave_axis[k,j,i],sdata[k,0,j,i],sdata[k,1,j,i],sdata[k,2,j,i],sdata[k,3,j,i])) #wv, I, Q, U, V
-
-        printc(f'  ---- >>>>> Inverting data: .... ',color=bcolors.OKGREEN)
-
-        cmd = fix_path(cmd)
-
-        trozo = f" {str(int(options[0]))} {str(int(options[1]))} {str(int(options[2]))} {str(int(options[3]))} {str(int(options[4]))} {str(int(options[5]))} {str(int(options[6]))}"
+        # filename = out_dir + 'dummy_in.txt'
         
-        # print('options: ', options)
+        # wave_axis = np.broadcast_to(wave_axis, (ny, nx, nwave))
+        # wave_axis = np.einsum('ijl->lij', wave_axis)
 
-        cmd = cmd + trozo + " " + out_dir+'dummy_in.txt' + " > " + out_dir+'dummy_out.txt'
-        print(cmd)
+        # # if cavity is defined, change the wavelength pixel by pixel
+        # if cavity.shape:
+        #     cavity = np.broadcast_to(cavity, (nwave, ny, nx))
+        #     wave_axis = wave_axis - cavity
 
-        rte_on = subprocess.call(cmd,shell=True)
+        # with open(filename,"w") as f:
+        #     for i in range(nx):
+        #         for j in range(ny):
+        #             for k in range(nwave):
+        #                 f.write('%e %e %e %e %e \n' % (wave_axis[k,j,i],sdata[k,0,j,i],sdata[k,1,j,i],sdata[k,2,j,i],sdata[k,3,j,i])) #wv, I, Q, U, V
 
-        printc('  ---- >>>>> Reading results.... ',color=bcolors.OKGREEN)
-        del_dummy = subprocess.call(f"rm {out_dir + 'dummy_in.txt'}",shell=True)
+        # printc(f'  ---- >>>>> Inverting data: .... ',color=bcolors.OKGREEN)
 
-        res = np.loadtxt(out_dir+'dummy_out.txt')
-        out = np.zeros((12,ny*nx)).astype(float)
-        for i in range(ny*nx):
-            out[:,i] = res[i*12:(i+1)*12]
-        out = out.reshape(12,nx,ny)
-        out = np.einsum('kji->kij', out)
-        _ = subprocess.call(f"rm {out_dir+'dummy_out.txt'}",shell=True)
+        # cmd = fix_path(cmd)
+
+        # trozo = f" {str(int(options[0]))} {str(int(options[1]))} {str(int(options[2]))} {str(int(options[3]))} {str(int(options[4]))} {str(int(options[5]))} {str(int(options[6]))}"
+        
+        # # print('options: ', options)
+
+        # cmd = cmd + trozo + " " + out_dir+'dummy_in.txt' + " > " + out_dir+'dummy_out.txt'
+        # print(cmd)
+
+        out = pym.phi_rte(sdata.copy(),
+                 wave_axis,
+                 rte,
+                 temp_dir=out_dir,
+                 cmd=cmd,
+                 options=options,
+                 weight=weight,
+                 mask=mask,
+                 initial_model=initial_model,
+                 cavity=cavity)
+        
+        # rte_on = subprocess.call(cmd,shell=True)
+
+        # printc('  ---- >>>>> Reading results.... ',color=bcolors.OKGREEN)
+        # del_dummy = subprocess.call(f"rm {out_dir + 'dummy_in.txt'}",shell=True)
+
+        # res = np.loadtxt(out_dir+'dummy_out.txt')
+        # out = np.zeros((12,ny*nx)).astype(float)
+        # for i in range(ny*nx):
+        #     out[:,i] = res[i*12:(i+1)*12]
+        # out = out.reshape(12,nx,ny)
+        # out = np.einsum('kji->kij', out)
+        # _ = subprocess.call(f"rm {out_dir+'dummy_out.txt'}",shell=True)
         
         print('Options:\n',options)
         print('Weights:\n',weight)
@@ -677,21 +766,30 @@ def run_milos(data,wave_axis,RTE_code,rte,cpos, ref_wavelength=6173.341000, opti
         # printc('Using PMILOS version')
         printc('   input shape in phi_rte: ', sdata.shape)
 
+        out = pym.phi_rte(sdata.copy(),
+                 wave_axis,
+                 rte,
+                 options=options,
+                 weight=weight,
+                 mask=mask,
+                 initial_model=initial_model,
+                 cavity=cavity)
+
         # Here we flatten the data to be one dimensinal and change the order (size first)
-        sdata = sdata.reshape(nwave, npol ,nx*ny)
-        printc('   reshaping into: ', data.shape)
+        # sdata = sdata.reshape(nwave, npol ,nx*ny)
+        # printc('   reshaping into: ', data.shape)
 
-        sdata = np.einsum('ijk->kji',sdata)
+        # sdata = np.einsum('ijk->kji',sdata)
 
-        if cavity.shape:
-            print('   Cavity shape is',cavity.shape)
-            cavity = cavity.flatten()
-            print('   reshaping cavity (flatten). New cavity shape',cavity.shape)
+        # if cavity.shape:
+        #     print('   Cavity shape is',cavity.shape)
+        #     cavity = cavity.flatten()
+        #     print('   reshaping cavity (flatten). New cavity shape',cavity.shape)
 
-        printc(f'  ---- >>>>> Inverting data: .... ',color=bcolors.OKGREEN)
+        # printc(f'  ---- >>>>> Inverting data: .... ',color=bcolors.OKGREEN)
 
-        out = pymilos.pmilos(options,sdata,wave_axis,weight,initial_model,cavity)
-        out = np.einsum('ijk->kij', np.reshape(out,(ny,nx,12)))
+        # out = pymilos.pmilos(options,sdata,wave_axis,weight,initial_model,cavity)
+        # out = np.einsum('ijk->kij', np.reshape(out,(ny,nx,12)))
 
         printc(f"PYMILOS RTE Inversion Run Time: {np.round(time.perf_counter() - start_time,3)} seconds ",bcolors.OKGREEN)
     
