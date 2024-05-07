@@ -662,7 +662,7 @@ def mu_angle(hdr,coord=None):
     hdr : header or filename
         header of the fits file or filename path
     coord : array, optional
-        pixel location for which the mu angle is found (if None: center of the FoV), by default None.
+        pixel location (x,y) for which the mu angle is found (if None: center of the FoV), by default None.
         Shape has to be (2,Npix)
 
     Returns
@@ -2048,6 +2048,10 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
 
                 hmi_remap = remap(phi_map, hmi_map, out_shape = (2048,2048), verbose=False)
 
+                # necessary when the FoV is close to the HMI limb
+                temp0 = hmi_remap.data.copy(); temp0[np.isinf(temp0)] = 0; temp0[np.isnan(temp0)] = 0
+                hmi_remap = sunpy.map.Map((temp0, hmi_remap.fits_header))
+
                 top_right = hmi_remap.world_to_pixel(tr)
                 bottom_left = hmi_remap.world_to_pixel(bl)
                 tr_hmi_map = np.array([top_right.x.value,top_right.y.value])
@@ -2765,7 +2769,7 @@ def plot_l2_pdf(path,did,version=None):
     missingKeys = []
     for key in keys:
         try:
-            datfile = glob.glob(os.path.join(path, f'solo_L2_phi-hrt-{key}_*_{version}_{did}.fits.gz'))[0]
+            datfile = glob.glob(os.path.join(path, f'solo_L2_phi-hrt-{key}_*_{version}_{did}.fits*'))[0]
             dat[key], h = load_fits(datfile)
         except:
             print('Missing '+key)
@@ -2778,7 +2782,7 @@ def plot_l2_pdf(path,did,version=None):
     _, _, _, sly, slx = limb_side_finder(dat['icnt'], h, False)
     
 
-    datfile = glob.glob(os.path.join(path, f'solo_L2_phi-hrt-stokes_*_{version}_{did}.fits.gz'))[0]
+    datfile = glob.glob(os.path.join(path, f'solo_L2_phi-hrt-stokes_*_{version}_{did}.fits*'))[0]
     stk, h = load_fits(datfile)
     if stk.shape[0] != 6 or stk.shape[1] != 4:
         stk = np.einsum('yxpl->lpyx',stk)

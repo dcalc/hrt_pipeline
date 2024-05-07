@@ -491,6 +491,7 @@ def run_milos(data,wave_axis,RTE_code,rte,cpos, ref_wavelength=6173.341000, opti
             Slope source function
             Minimum chisqr value
     """
+    import pymilos_old as pym
     print(" ")
     printc('-->>>>>>> RUNNING PYMILOS ',color=bcolors.OKGREEN)
     
@@ -555,13 +556,13 @@ def run_milos(data,wave_axis,RTE_code,rte,cpos, ref_wavelength=6173.341000, opti
         options[4] = 0 #FWHM = atof(argv[5]);
         options[5] = 0 ##DELTA = atof(argv[6]);
         options[6] = 0 #NMUESTRAS_G = atoi(argv[7]);
-        options[7] = 0 # bad pixel check
-        options[8] = 0 # lambda parameter
+        # options[7] = 0 # bad pixel check
+        # options[8] = 0 # lambda parameter
         
     else:
         options = np.array(options)
         options_set = 1
-        assert (options.size == 9)
+        assert (options.size == 7) # 7 with pymilos_old
 
 
     """
@@ -668,7 +669,7 @@ def run_milos(data,wave_axis,RTE_code,rte,cpos, ref_wavelength=6173.341000, opti
             print('options:',options)
             print('data shape:',sdata.shape)
 
-            res = pym.pymilos(options, sdata, wave_axis, weight, initial_model)
+            res = pym.pmilos(options, sdata, wave_axis, weight, initial_model)
             # n_models,stokes,wave  we would need (wave, pol, y * x)
 
             #add wavelenth axis for having same behaviour as cmilos
@@ -766,30 +767,31 @@ def run_milos(data,wave_axis,RTE_code,rte,cpos, ref_wavelength=6173.341000, opti
         # printc('Using PMILOS version')
         printc('   input shape in phi_rte: ', sdata.shape)
 
-        out = pym.phi_rte(sdata.copy(),
-                 wave_axis,
-                 rte,
-                 options=options,
-                 weight=weight,
-                 mask=mask,
-                 initial_model=initial_model,
-                 cavity=cavity)
-
+        # out = pym.phi_rte(sdata.copy(),
+        #          wave_axis,
+        #          rte,
+        #          options=options,
+        #          weight=weight,
+        #          mask=mask,
+        #          initial_model=initial_model,
+        #          cavity=cavity)
+        
+        # OLD PYMILOS
         # Here we flatten the data to be one dimensinal and change the order (size first)
-        # sdata = sdata.reshape(nwave, npol ,nx*ny)
-        # printc('   reshaping into: ', data.shape)
+        sdata = sdata.reshape(nwave, npol ,nx*ny)
+        printc('   reshaping into: ', data.shape)
 
-        # sdata = np.einsum('ijk->kji',sdata)
+        sdata = np.einsum('ijk->kji',sdata)
 
-        # if cavity.shape:
-        #     print('   Cavity shape is',cavity.shape)
-        #     cavity = cavity.flatten()
-        #     print('   reshaping cavity (flatten). New cavity shape',cavity.shape)
+        if cavity.shape:
+            print('   Cavity shape is',cavity.shape)
+            cavity = cavity.flatten()
+            print('   reshaping cavity (flatten). New cavity shape',cavity.shape)
 
-        # printc(f'  ---- >>>>> Inverting data: .... ',color=bcolors.OKGREEN)
+        printc(f'  ---- >>>>> Inverting data: .... ',color=bcolors.OKGREEN)
 
-        # out = pymilos.pmilos(options,sdata,wave_axis,weight,initial_model,cavity)
-        # out = np.einsum('ijk->kij', np.reshape(out,(ny,nx,12)))
+        out = pym.pmilos(options,sdata,wave_axis,weight,initial_model,cavity)
+        out = np.einsum('ijk->kij', np.reshape(out,(ny,nx,12)))
 
         printc(f"PYMILOS RTE Inversion Run Time: {np.round(time.perf_counter() - start_time,3)} seconds ",bcolors.OKGREEN)
     

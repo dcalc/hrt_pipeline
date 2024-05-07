@@ -273,6 +273,10 @@ def phihrt_pipe(input_json_file):
             data_arr[scan], hdr_arr[scan] = get_data(data_f[scan], scaling = accum_scaling, bit_convert_scale = bit_conversion, scale_data = scale_data)
 
             wave_axis_arr[scan], voltagesData_arr[scan], tuning_constant_arr[scan], cpos_arr[scan] = fits_get_sampling(data_f[scan], TemperatureCorrection = TemperatureCorrection, TemperatureConstant = TemperatureConstant, verbose = True)
+            
+            if hdr_arr[scan]['PHIDATID'] == '0250180115':
+                printc(f'Manual shift of the wavelength due to Etalon dots',color=bcolors.WARNING)
+                wave_axis_arr[scan] -= 0.015 # Angstrom
 
             if 'IMGDIRX' in hdr_arr[scan] and hdr_arr[scan]['IMGDIRX'] == 'YES':
                 print(f"This scan has been flipped in the Y axis to conform to orientation standards. \n File: {data_f[scan]}")
@@ -574,17 +578,18 @@ def phihrt_pipe(input_json_file):
     # NORM FLAT FIELDS
     #-----------------
 
-    if norm_f and flat_c:
-        flat = normalise_flat(flat, ceny, cenx)
+    if flat_c:
+        if norm_f:
+            flat = normalise_flat(flat, ceny, cenx)
 
-        print(" ")
-        printc('-->>>>>>> Normalising flats over central region',color=bcolors.WARNING)
+            print(" ")
+            printc('-->>>>>>> Normalising flats over central region',color=bcolors.WARNING)
 
-    else:
-        flat = normalise_flat(flat, slice(0,2048), slice(0,2048))
+        else:
+            flat = normalise_flat(flat, slice(0,2048), slice(0,2048))
 
-        print(" ")
-        printc('-->>>>>>> Normalising flats over whole FOV',color=bcolors.WARNING)
+            print(" ")
+            printc('-->>>>>>> Normalising flats over whole FOV',color=bcolors.WARNING)
         
     #-----------------
     # APPLY FLAT CORRECTION 
@@ -982,8 +987,34 @@ def phihrt_pipe(input_json_file):
         print(" ")
         printc('-->>>>>>> PSF deconvolution on Stokes vectors',color=bcolors.OKGREEN)
         for scan in range(data_shape[-1]):
-            data[...,scan] = restore_stokes_cube(data[...,scan], hdr_arr[scan],aberr_cor=PSFaberr)
-            hdr_arr[scan]['CAL_PSF'] = 'Interpolated PSF; aberration: '+str(PSFaberr)
+            ## Fatima's code
+            # res_stokes, coefs = restore_stokes_cube(data[...,scan], hdr_arr[scan],aberr_cor=PSFaberr)
+            # data[...,scan] = res_stokes
+            # hdr_arr[scan]['CAL_PSF'] = 'Interpolated PSF; aberration: '+str(PSFaberr)
+            ##
+
+            ## Fran's code
+            mask = np.ones((data_size[0],data_size[1]))
+            if norm_stokes:
+                if limb:
+                    mask = limb_mask[...,scan]
+            if fs_c:
+                mask = mask*field_stop[rows,cols]
+
+            if np.sum(mask==0) == 0:
+                mask = None
+            
+            # deconvolution on modulated data
+            dat, _ = demod_hrt(data[...,scan],pmp_temp,modulate=True)
+            res_stokes, coefs = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), 
+                                             mask=mask, gamma2=0.02, low_f=0.8, aberr_cor=PSFaberr)
+            res_stokes, _ = demod_hrt(res_stokes,pmp_temp)
+
+            data[...,scan] = res_stokes
+            hdr_arr[scan]['CAL_PSF'] = 'lofdahl PSF deconv; gamma2=0.02; low_f=0.8; aberration: '+str(PSFaberr)
+            ##
+            
+            hdr_arr[scan]['CAL_ZER'] = str(list(np.round(coefs,5)))
 
         data *= field_stop[rows,cols, np.newaxis, np.newaxis, np.newaxis]
 
@@ -1165,11 +1196,13 @@ def phihrt_pipe(input_json_file):
             print("Desired Output directory missing / character, will be added")
             out_dir = out_dir + "/"
 
-        if limb:
-            mask = limb_mask*field_stop[rows,cols,np.newaxis]
-        else:
-            mask = np.ones((data_size[0],data_size[1],data_shape[-1]))*field_stop[rows,cols,np.newaxis]
-            
+        mask = np.ones((data_size[0],data_size[1],data_shape[-1]))
+        if norm_stokes:
+            if limb:
+                mask = limb_mask
+        if fs_c:
+            mask = mask*field_stop[rows,cols,np.newaxis]
+           
         if avg_stokes_before_rte:
             data = np.mean(data, axis = (-1))
             data_shape = (data_size[0], data_size[1], 1)
