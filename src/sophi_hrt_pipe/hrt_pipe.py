@@ -1233,7 +1233,7 @@ def phihrt_pipe(input_json_file):
 
         generate_l2(data_f, hdr_arr, wave_axis_arr, cpos_arr, 
                     data, mask, imgdirx_flipped, out_rte_filename, out_dir, 
-                    cavity_f, rows, cols, vrs,
+                    [None,cavity_f][cavity_c], rows, cols, vrs,
                     **RTE_options)
                     
         # if pymilos_opt:
