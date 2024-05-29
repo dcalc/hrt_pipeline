@@ -131,7 +131,8 @@ def phihrt_pipe(input_json_file):
         flat_f = input_dict['flat_f']
         dark_f = input_dict['dark_f']
         prefilter_f = input_dict['prefilter_f']
-        
+        cavity_f = input_dict['cavity_f']
+
         #input/output type + scaling
         L1_input = input_dict['L1_input']
         if L1_input:
@@ -180,10 +181,10 @@ def phihrt_pipe(input_json_file):
         else:
             ghost_c = False
         cavity_c = input_dict['cavity_c']
-        if cavity_c:
-            cavity_f = input_dict['cavity_f']
-        else:
-            cavity_f = None
+        # if cavity_c:
+        #     cavity_f = input_dict['cavity_f']
+        # else:
+        #     cavity_f = None
         # rte = input_dict['rte']
         out_intermediate = input_dict['out_intermediate']  #20211116
         # pymilos_opt = input_dict['pymilos']
@@ -435,6 +436,19 @@ def phihrt_pipe(input_json_file):
         printc('-->>>>>>> No flats mode',color=bcolors.WARNING)
 
     #-----------------
+    # READ CAVITY MAPS
+    #-----------------
+
+    if cavity_f is not None:
+        
+        cavity = cavity_shifts(cavity_f,wave_axis_arr[0],slice(0,flat.shape[0]),slice(0,flat.shape[1]),False)
+
+    else:
+        cavity = None
+        print(" ")
+        printc('-->>>>>>> No cavity compensation in Prefilter Correction',color=bcolors.WARNING)
+
+    #-----------------
     # READ AND CORRECT DARK FIELD
     #-----------------
 
@@ -528,9 +542,9 @@ def phihrt_pipe(input_json_file):
         # data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],TemperatureCorrection=TemperatureCorrection)
         # DC 20221109 test for Smitha. PF already removed from the flat
         if flat_c:
-            wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True)
+            wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)
             wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0]) 
-            flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],prefilter,TemperatureCorrection=TemperatureCorrection)[...,0]
+            flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],prefilter,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity)[...,0]
         # flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),imgdirx_flipped)[...,0]
         
         # for hdr in hdr_arr:
@@ -639,7 +653,7 @@ def phihrt_pipe(input_json_file):
         #     prefilter = prefilter[:,::-1]
         # prefilter = prefilter[rows,cols]
         
-        data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],TemperatureCorrection=TemperatureCorrection)
+        data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity[rows,cols])
         # DC 20221109 test for Smitha. PF already removed from the flat
         # wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True)
         # wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0]) 
@@ -1001,14 +1015,18 @@ def phihrt_pipe(input_json_file):
             if fs_c:
                 mask = mask*field_stop[rows,cols]
 
+            if iss_off:
+                mask = binary_erosion(mask>0,generate_binary_structure(2,2), iterations=3)
+            
             if np.sum(mask==0) == 0:
                 mask = None
             
+
             # deconvolution on modulated data
-            dat, _ = demod_hrt(data[...,scan],pmp_temp,modulate=True)
-            res_stokes, coefs = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), 
+            # dat, _ = demod_hrt(data[...,scan],pmp_temp,modulate=True)
+            res_stokes, coefs = fran_restore(data[...,scan], datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), 
                                              mask=mask, gamma2=0.02, low_f=0.8, aberr_cor=PSFaberr)
-            res_stokes, _ = demod_hrt(res_stokes,pmp_temp)
+            # res_stokes, _ = demod_hrt(res_stokes,pmp_temp)
 
             data[...,scan] = res_stokes
             hdr_arr[scan]['CAL_PSF'] = 'lofdahl PSF deconv; gamma2=0.02; low_f=0.8; aberration: '+str(PSFaberr)

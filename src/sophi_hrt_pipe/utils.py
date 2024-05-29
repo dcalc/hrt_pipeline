@@ -698,13 +698,13 @@ def center_coord(hdr):
     center: [x,y,1] coordinates of the solar disk center (units: pixel)
     """
     pxsc = hdr['CDELT1']
-    sun_dist_m=(hdr['DSUN_AU']*u.AU).to(u.m).value #Earth
-    sun_dist_AU=hdr['DSUN_AU'] #Earth
-    rsun = hdr['RSUN_REF'] # m
-    pxbeg1 = hdr['PXBEG1']
-    pxend1 = hdr['PXEND1']
-    pxbeg2 = hdr['PXBEG2']
-    pxend2 = hdr['PXEND2']
+    # sun_dist_m=(hdr['DSUN_AU']*u.AU).to(u.m).value #Earth
+    # sun_dist_AU=hdr['DSUN_AU'] #Earth
+    # rsun = hdr['RSUN_REF'] # m
+    # pxbeg1 = hdr['PXBEG1']
+    # pxend1 = hdr['PXEND1']
+    # pxbeg2 = hdr['PXBEG2']
+    # pxend2 = hdr['PXEND2']
     crval1 = hdr['CRVAL1']
     crval2 = hdr['CRVAL2']
     crpix1 = hdr['CRPIX1']
@@ -843,7 +843,7 @@ def limb_side_finder(img, hdr,verbose=True,outfinder=False):
         return side, center, Rpix, sly, slx
 
 
-def limb_fitting(img, hdr, field_stop, verbose=True, percent=False):
+def limb_fitting(img, hdr, field_stop, verbose=True, percent=False, fit_results=False):
     """Fits limb to the image using least squares method.
 
     Parameters
@@ -858,6 +858,8 @@ def limb_fitting(img, hdr, field_stop, verbose=True, percent=False):
         Print limb fitting results, by default True
     percent : bool, optional
         return mask with 90% of the readius, by default False
+    fit_results : bool, optional
+        return results of the circular fit, by default False
 
     Returns
     -------
@@ -983,16 +985,19 @@ def limb_fitting(img, hdr, field_stop, verbose=True, percent=False):
 
     mask96 = circular_mask(img.shape[0],img.shape[1],[p.x[0],p.x[1]],p.x[2]*.96)
     
+    output = [sly,slx,side]
     if 'N' in side or 'S' in side:
+        output = [np.moveaxis(mask100,0,1)] + output
         if percent:
-            return np.moveaxis(mask100,0,1), sly, slx, side, np.moveaxis(mask96,0,1)
-        else:
-            return np.moveaxis(mask100,0,1), sly, slx, side
+            output += [np.moveaxis(mask96,0,1)]
     else:
+        output = [mask100] + output
         if percent:
-            return mask100, sly, slx, side, mask96
-        else:
-            return mask100, sly, slx, side
+            output += [mask96]
+    if fit_results:
+        output += [p]    
+
+    return output
 
 def fft_shift(img,shift):
     """Shift an image in the Fourier domain and return the shifted image (non fourier domain)
@@ -2696,10 +2701,14 @@ def show_image_array(arr, hdr, grayscales, row_labels=None,
         mean = im[sly,slx].mean()
 
         ax = axs[i, j]
-        im = axs[i, j].imshow(im, cmap='gray', vmin=mean-grayscales[i], vmax=mean+grayscales[i],interpolation=None)
-
+        
         # Print color scale range
-        ax.text(0.05, 0.94, f'{mean:.4f} $\pm$ {grayscales[i]:.3f}', transform=ax.transAxes, color='white')
+        if i==0:
+            im = axs[i, j].imshow(im, cmap='gray', clim=grayscales[i],interpolation=None)
+            ax.text(0.05, 0.94, f'{grayscales[i][0]:.1f} - {grayscales[i][1]:.1f}', transform=ax.transAxes, color='white')
+        else:
+            im = axs[i, j].imshow(im, cmap='gray', vmin=mean+grayscales[i][0], vmax=mean+grayscales[i][1],interpolation=None)
+            ax.text(0.05, 0.94, f'{mean:.4f} $\pm$ {grayscales[i][1]:.3f}', transform=ax.transAxes, color='white')
 
     # Set row labels
     if row_labels is not None:
@@ -3013,7 +3022,7 @@ def plot_l2_pdf(path,did,version=None):
 
     dat = np.transpose(stk, (1, 0, 2, 3))  # re-arrange Stokes and wavelength axes 
 
-    grayscales = [1] + [0.01] * 3  # I, Q, U, V
+    grayscales = [(.3,1.2)] + [(-3e-3,3e-3)]*3 # [1] + [0.01] * 3  # I, Q, U, V
     row_labels = ['I', 'Q', 'U', 'V']
     column_labels = ['{:.3f} nm'.format(wave) for wave in wavelengths]
     title = os.path.basename(datfile) 

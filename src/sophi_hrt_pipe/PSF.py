@@ -309,7 +309,7 @@ def cir_aperture(R,N,ct=None):
 
     N = int(N)
     R = int(R)
-    A = CircularAperture((N/2-ct,N/2-ct),r=R) #Circular mask (1s in and 0s out)
+    # A = CircularAperture((N/2-ct,N/2-ct),r=R) #Circular mask (1s in and 0s out)
     # DC change on 2024-05-02 to set the center as in sampling2
     # A = A.to_mask(method='exact') #Mask with exact value in edge pixels
     x = (np.arange(0,N) - np.floor(N/2))/R
@@ -572,19 +572,21 @@ def Qfactor(Hk,nuc,N,gamma=gamma1,reg=0.1):
     #For the effect of gamma2 (reg) to increase with the frequency in the way
     #described in Martinez Pillet (2011), Sect. 9.2)
     if reg>0:
-        nx=Hk.shape[0]
-        ny=Hk.shape[1]
-        x=np.linspace(-int(nx/2),int(nx/2),nx)
-        y=np.linspace(-int(ny/2),int(ny/2),ny)
+        nx=Hk.shape[1]
+        ny=Hk.shape[0]
+        x = (np.arange(0,nx) - np.floor(nx/2))/nuc
+        y = (np.arange(0,ny) - np.floor(ny/2))/nuc
+
         [X,Y]=np.meshgrid(x,y)
-        Q=1/np.sqrt(np.sum(gamma*np.abs(Hk)**2,axis=2)+reg*np.sqrt(X**2+Y**2)/nuc) #Linear
+        Q=1/np.sqrt(np.sum(gamma*np.abs(Hk)**2,axis=2)+reg*np.sqrt(X**2+Y**2)) #Linear
         #Q=1/np.sqrt(np.sum(gamma*np.abs(Hk)**2,axis=2)+reg*(X**2+Y**2)/nuc**2) #Quadratic
         #Q=1/np.sqrt(np.sum(gamma*np.abs(Hk)**2,axis=2)+reg*np.sqrt(np.sqrt(X**2+Y**2)/nuc)) #Sqrt
     else:
         Q=1/np.sqrt(np.sum(gamma*np.abs(Hk)**2,axis=2)+reg)
     
     Q=np.nan_to_num(Q, nan=0, posinf=0, neginf=0)
-    Q=Q*cir_aperture(R=nuc,N=N,ct=0)
+    # Q=Q*cir_aperture(R=nuc,N=N,ct=0)
+    Q[np.sqrt(X**2+Y**2)>1] = 0.
     return Q
 
 def Qinv(Hk,nuc,N,gamma=gamma1):
@@ -856,7 +858,7 @@ def is_notebook() -> bool:
         return False      # Probably standard Python interpreter
 
 def stokes_restoration(stokes_data,coefs,rest='lofdahl', gamma2=0.1,denoise=False,
-                       wind_opt=True, low_f=0.1,num_iter=10,aberr_cor=False):
+                       wind_opt=True, low_f=0.1,num_iter=10,aberr_cor=False,padding=True):
     """
     This function restores a cube of Stokes data from a given set of
     Zernike coefficients.
@@ -883,7 +885,10 @@ def stokes_restoration(stokes_data,coefs,rest='lofdahl', gamma2=0.1,denoise=Fals
     #     edge_mask[3:-3,3:-3] = 1
     # else:
     #     edge_mask = np.ones((size,size))
-    pad_width = int(size*10/(100-10*2))
+    if padding:
+        pad_width = int(size*10/(100-10*2))
+    else:
+        pad_width = int(0)
     res_stokes = np.zeros((size+pad_width*2,size+pad_width*2,4,6))
 
 
@@ -949,7 +954,7 @@ def stokes_restoration(stokes_data,coefs,rest='lofdahl', gamma2=0.1,denoise=Fals
     #     res_stokes=demod_hrt_fran() @ res_stokes
 
     #We extract only the subfield we are interested in
-    res_stokes = res_stokes[pad_width:-pad_width,pad_width:-pad_width] #* edge_mask[:,:,np.newaxis,np.newaxis]
+    res_stokes = res_stokes[pad_width:res_stokes.shape[0]-pad_width,pad_width:res_stokes.shape[1]-pad_width] #* edge_mask[:,:,np.newaxis,np.newaxis]
     return res_stokes
 
 def edge_masking(stokes, mask):
@@ -971,13 +976,16 @@ def edge_masking(stokes, mask):
     dd = np.sqrt((xf-xe[:,np.newaxis])**2 + (yf-ye[:,np.newaxis])**2); idx = np.argmin(dd,axis=0)
     stokes_edge[yf,xf] = stokes[ye[idx],xe[idx]]
 
-    for l in range(6):
-        for p in range(4):
-            stokes_edge[mask==0,p,l] = gaussian_filter(stokes_edge[:,:,p,l],20,mode='reflect')[mask==0]
+    if stokes.ndim == 2:
+        stokes_edge[mask==0] = gaussian_filter(stokes_edge,20,mode='reflect')[mask==0]
+    elif stokes.ndim == 4:
+        for l in range(6):
+            for p in range(4):
+                stokes_edge[mask==0,p,l] = gaussian_filter(stokes_edge[:,:,p,l],20,mode='reflect')[mask==0]
     
     return stokes_edge
 
-def fran_restore(stokes_data, tobs, mask=None, rest='lofdahl', gamma2 = 0.1, low_f=0.1, denoise=False, num_iter=10, aberr_cor = False):
+def fran_restore(stokes_data, tobs, mask=None, rest='lofdahl', gamma2 = 0.1, low_f=0.1, denoise=False, num_iter=10, aberr_cor = False, padding=True):
     #Input parameters
     # mask=None # mask of the field_stop and limb
     # rest='lofdahl' #'lofdahl','lucy-richardson'or 'unsupervised_wiener'. Type of restoration (Here only lofdahl is implemented)
@@ -1058,7 +1066,7 @@ def fran_restore(stokes_data, tobs, mask=None, rest='lofdahl', gamma2 = 0.1, low
     res_stokes=stokes_restoration(stokes_data_edge,coefs,rest=rest, gamma2=gamma2,
                                     denoise=denoise,
                                     wind_opt=wind_opt,low_f=low_f,
-                                    num_iter=num_iter, aberr_cor=aberr_cor)
+                                    num_iter=num_iter, aberr_cor=aberr_cor,padding=padding)
     
     if mask is not None:
         res_stokes[mask==0] = stokes_data[mask==0]

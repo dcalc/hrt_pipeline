@@ -356,7 +356,7 @@ def demod_hrt(data, pmp_temp, verbose = True, modulate = False) -> np.ndarray:
     if verbose:
         printc(f'Using a constant demodulation matrix for a PMP TEMP of {pmp_temp} deg, rotated by {HRT_MOD_ROTATION_ANGLE} deg',color = bcolors.OKGREEN)
     
-    if modulate and verbose:
+    if modulate:
         demod_data = mod_matrix
 
     
@@ -431,7 +431,13 @@ def unsharp_masking(flat,sigma,flat_pmp_temp,cpos_arr,clean_mode,clean_f,pol_end
     if "V" in clean_mode:
         clean_pol += [3]
     
-    print("Unsharp Masking",clean_mode)
+    # add possibility to blur continuum
+    if "cont" in clean_mode:
+        wv_range = range(6)
+        if "only" in clean_mode:
+            wv_range = [cpos_arr[0]]
+    
+    print("Unsharp Masking",clean_mode, wv_range)
 
         
     if clean_f == 'blurring':
@@ -585,7 +591,7 @@ def prefilter_correctionNew(data,wave_axis_arr,rows,cols,imgdirx_flipped = 'YES'
         data[...,scan] /= prefilter
     return data
 
-def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None, TemperatureCorrection=False, TemperatureConstant = 36.46e-3):
+# def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None, TemperatureCorrection=False, TemperatureConstant = 36.46e-3):
     """Apply prefilter correction to input data
 
     Parameters
@@ -689,6 +695,117 @@ def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None,
 
             data[:,:,:,wv,scan] /= imprefilter[...,np.newaxis]
             
+    return data
+
+def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None, TemperatureCorrection=False, TemperatureConstant = 36.46e-3, shift = None):
+    """Apply prefilter correction to input data
+
+    Parameters
+    ----------
+    data: ndarray
+        input data
+    wave_axis_arr: ndarray
+        array containing wavelengths
+    prefilter: ndarray
+        prefilter data
+    prefilter_voltages: ndarray
+        prefilter voltages, DEFAULT = None - uses latest prefilter voltages from on ground calibration
+    TemperatureCorrection: bool
+        apply temperature correction to prefilter data, DEFAULT = False
+    TemperatureConstant: float
+        value of the temperature tuning constant to be used when TemperatureConstant is True, DEFAULT = 36.46e-3 mA/K
+
+    Returns
+    -------
+    data: ndarray
+        prefilter corrected data
+
+    adapted from SPGPylibs
+    """
+    def _get_v1_index1(x):
+        # index1, v1 = min(enumerate([abs(i) for i in x]), key=itemgetter(1))
+        index1, v1 = min(enumerate(x), key = lambda i: abs(i[1]))
+        # return  x[index1], index1
+        return  v1, index1
+    
+    if prefilter_voltages is None:
+        # OLD prefilter voltages
+        # prefilter_voltages = np.asarray([-1300.00,-1234.53,-1169.06,-1103.59,-1038.12,-972.644,-907.173,-841.702,-776.231,-710.760,-645.289,
+        #                                 -579.818,-514.347,-448.876,-383.404,-317.933,-252.462,-186.991,-121.520,-56.0490,9.42212,74.8932,
+        #                                 140.364,205.835,271.307, 336.778,402.249,467.720,533.191,598.662,664.133,729.604,795.075,860.547,
+        #                                 926.018,991.489,1056.96,1122.43,1187.90,1253.37, 1318.84,1384.32,1449.79,1515.26,1580.73,1646.20,
+        #                                 1711.67,1777.14,1842.61])
+        prefilter_voltages = np.asarray([-1277.   , -1210.75 , -1145.875, -1080.25 , -1015.25 ,  -950.25 ,
+                                        -885.75 ,  -820.125,  -754.875,  -691.   ,  -625.5  ,  -559.75 ,
+                                        -494.125,  -428.25 ,  -364.   ,  -298.875,  -233.875,  -169.   ,
+                                        -104.625,   -40.875,    21.125,    86.25 ,   152.25 ,   217.5  ,
+                                         282.625,   346.25 ,   411.   ,   476.125,   542.   ,   607.75 ,
+                                         672.125,   738.   ,   803.75 ,   869.625,   932.   ,   996.625,
+                                        1062.125,  1128.   ,  1192.   ,  1258.125,  1323.625,  1387.25 ,
+                                        1451.875,  1516.875,  1582.125,  1647.75 ,  1713.875,  1778.375,
+                                        1844.   ])
+    if TemperatureCorrection:
+        # temperature_constant_old = 40.323e-3 # old temperature constant, still used by Johann
+        # temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
+        # temperature_constant_new = 36.46e-3 # value from HS
+        Tfg = 66 # FG was at 66 deg during e2e calibration
+        tunning_constant = 0.0003513 # this shouldn't change
+        
+        ref_wavelength = 6173.341 # this shouldn't change
+        prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength + TemperatureConstant*(Tfg-61) - 0.002 # JH ref
+        
+        # ref_wavelength = round(6173.072 - (-1300*tunning_constant),3) # 6173.529. 0 level was different during e2e test
+        # prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength # + temperature_constant_new*(Tfg-61)
+       
+    else:
+        tunning_constant = 0.0003513
+        ref_wavelength = 6173.341 # this shouldn't change
+        prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength
+    
+    data_shape = data.shape
+    
+    for scan in range(data_shape[-1]):
+
+        wave_list = wave_axis_arr[scan]
+        
+        if shift is None:
+            for wv in range(len(wave_list)):
+
+                v = wave_list[wv]
+
+                vdif = [v - pf for pf in prefilter_wave]
+
+                v1, index1 = _get_v1_index1(vdif)
+                if v < prefilter_wave[-1] and v > prefilter_wave[0]:
+
+                    if vdif[index1] >= 0:
+                        v2 = vdif[index1 + 1]
+                        index2 = index1 + 1
+
+                    else:
+                        v2 = vdif[index1-1]
+                        index2 = index1 - 1
+
+                    # imprefilter = (prefilter[:,:, index1]*(0-v1) + prefilter[:,:, index2]*(v2-0))/(v2-v1) #interpolation between nearest voltages
+
+                elif v >= prefilter_wave[-1]:
+                    index2 = index1 - 1
+                    v2 = vdif[index2]
+
+                elif v <= prefilter_wave[0]:
+                    index2 = index1 + 1
+                    v2 = vdif[index2]
+
+                imprefilter = (prefilter[:,:, index1]*v2 + prefilter[:,:, index2]*(-v1))/(v2-v1) #interpolation between nearest voltages
+
+                # imprefilter = (prefilter[:,:, index1]*v1 + prefilter[:,:, index2]*v2)/(v1+v2) #interpolation between nearest voltages
+
+                data[:,:,:,wv,scan] /= imprefilter[...,np.newaxis]
+        else:
+            for i in range(data.shape[0]):
+                for j in range(data.shape[1]):
+                    data[i,j,:,:,scan] /= np.interp(wave_list - shift[i,j],prefilter_wave,prefilter[i,j])
+  
     return data
 
 def apply_field_stop(data, rows, cols, header_imgdirx_exists, imgdirx_flipped) -> np.ndarray:
