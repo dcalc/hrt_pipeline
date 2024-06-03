@@ -1952,7 +1952,7 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
             F = F/F[slice(0,2048),slice(0,2048)].mean(axis=(0,1))[np.newaxis,np.newaxis]
 
         if prefilter_f is not None:
-            F = prefilter_correction(F[...,np.newaxis],[wave_flat],prefilter,None,True)[...,0]
+            F = prefilter_correction(F[...,np.newaxis],[wave_flat],prefilter,None,TemperatureCorrection,TemperatureConstant)[...,0]
             
         PD = PD / F[np.newaxis,rows,cols,0,cpos_f]
     
@@ -1979,12 +1979,47 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         temp[1][1][13:]
         name = temp[0]+level+temp[1][0]+version+temp[1][1][13:]
 
+        # add wavelength keywords
+        previousKey = 'WAVEMAX'
+        for i in range(1):
+            newKey = f'WAVE{i+1}'
+            h.set(newKey, round(wl,3), f'[Angstrom] {i+1}. wavelength of observation', after=previousKey)
+            previousKey = newKey
+        # add voltage keywords
+        for i in range(1):
+            newKey = f'VOLTAGE{i+1}'
+            h.set(newKey, int(Volt), f'[Volt] {i+1}. voltage of observation', after=previousKey)
+            previousKey = newKey
+        # add continuum position keywords
+        # newKey = 'CONTPOS'
+        # h.set(newKey, int(cpos+1), 'continuum position (1: blue, 6: red)', after=previousKey)
+        # previousKey = newKey
+        # add voltage tuning constant keywords
+        newKey = 'TUNCONS'
+        h.set(newKey, tunning_constant, f'[mAngstrom / Volt] voltage tuning constant', after=previousKey)
+        previousKey = newKey
+        # add temperature tuning constant keywords
+        newKey = 'TEMPCONS'
+        if TemperatureCorrection:
+            h.set(newKey, TemperatureConstant, '[mAngstrom / Kelvin] temperature constant', after=previousKey)
+        else:
+            h.set(newKey, 0, '[mAngstrom / Kelvin] temperature constant', after=previousKey)
+        previousKey = newKey
+
+        # dark file
+        h['CAL_DARK'] = dark_f
+        # flat file
+        h['CAL_FLAT'] = flat_f
+        if prefilter_f is not None:
+            h['CAL_PRE'] = prefilter_f
+        # change NAXIS1, 2
+        h.comments['NAXIS1'] = 'number of pixels on the x axis'
+        h.comments['NAXIS2'] = 'number of pixels on the y axis'
+        
         with fits.open(data_f) as hdr:
             hdr[0].data = PD
-            hdr[0].header['CAL_DARK'] = dark_f
-            hdr[0].header['CAL_FLAT'] = flat_f
-            if prefilter_f is not None:
-                hdr[0].header['CAL_PRE'] = prefilter_f
+            hdr[0].header = h
+            
             hdr.writeto(out_dir+name, overwrite=True)
     
     return PD
