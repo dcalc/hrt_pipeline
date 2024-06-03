@@ -111,7 +111,7 @@ def phihrt_pipe(input_json_file):
     SPGYlib
 
     '''
-    version = 'V1.8.2 February 27th 2024'
+    version = 'V1.8.3 June 3rd 2024'
 
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
     printc('PHI HRT data reduction software  ',bcolors.OKGREEN)
@@ -181,10 +181,11 @@ def phihrt_pipe(input_json_file):
         else:
             ghost_c = False
         cavity_c = input_dict['cavity_c']
-        # if cavity_c:
-        #     cavity_f = input_dict['cavity_f']
-        # else:
-        #     cavity_f = None
+        if cavity_c:
+            cavity_f = input_dict['cavity_f']
+        else:
+            cavity_f = None
+        
         # rte = input_dict['rte']
         out_intermediate = input_dict['out_intermediate']  #20211116
         # pymilos_opt = input_dict['pymilos']
@@ -653,7 +654,10 @@ def phihrt_pipe(input_json_file):
         #     prefilter = prefilter[:,::-1]
         # prefilter = prefilter[rows,cols]
         
-        data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity[rows,cols])
+        if cavity is not None:
+            data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity[rows,cols])
+        else:
+            data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity)
         # DC 20221109 test for Smitha. PF already removed from the flat
         # wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True)
         # wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0]) 
