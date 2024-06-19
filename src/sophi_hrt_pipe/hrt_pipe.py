@@ -295,8 +295,8 @@ def phihrt_pipe(input_json_file):
                 hdr_arr[scan].set(newKey, int(voltagesData_arr[scan][i]), f'[Volt] {i+1}. voltage of observation', after=previousKey)
                 previousKey = newKey
             # add continuum position keywords
-            newKey = 'CONTPOS'
-            hdr_arr[scan].set(newKey, int(cpos_arr[scan]+1), 'continuum position (1: blue, 6: red)', after=previousKey)
+            newKey = 'CONTPOS' # as implemented by DG
+            hdr_arr[scan].set(newKey, int(cpos_arr[scan]//5), 'Continuum pos 0 = blue,1 = red,-1 = undef', after=previousKey)
             previousKey = newKey
             # add voltage tuning constant keywords
             newKey = 'TUNCONS'
@@ -532,21 +532,18 @@ def phihrt_pipe(input_json_file):
         prefilter_c = True
         start_time = time.perf_counter()
 
-        # data = prefilter_correction(data,wave_axis_arr,rows,cols,imgdirx_flipped)
-
         prefilter, _ = load_fits(prefilter_f)
         if imgdirx_flipped == 'YES':
             print('Flipping prefilter on the Y axis')
             prefilter = prefilter[:,::-1]
         # prefilter = prefilter[rows,cols]
         
-        # data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],TemperatureCorrection=TemperatureCorrection)
-        # DC 20221109 test for Smitha. PF already removed from the flat
         if flat_c:
             wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)
-            wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0]) 
-            flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],prefilter,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity)[...,0]
-        # flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),imgdirx_flipped)[...,0]
+            wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0])
+            Tetalon_flat = header_flat['FGH_TSP1']
+            flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],prefilter,Tetalon=Tetalon_flat,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity)[...,0]
+            # flat = prefilter_correctionNew(flat[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),Tetalon=Tetalon_flat,imgdirx_flipped = 'YES')[...,0]
         
         # for hdr in hdr_arr:
         #     hdr['CAL_PRE'] = prefilter_f
@@ -618,7 +615,7 @@ def phihrt_pipe(input_json_file):
             
             for hdr in hdr_arr:
                 hdr['CAL_FLAT'] = DID_flat
-            
+                hdr['CAL_FNUM'] = flat_states
             if out_intermediate:
                 data_flatc = data.copy()
             
@@ -645,7 +642,8 @@ def phihrt_pipe(input_json_file):
         printc('-->>>>>>> Prefilter Correction On Data AFTER FLAT FIELDING',color=bcolors.OKGREEN)
         # prefilter_c = True
         start_time = time.perf_counter()
-
+        Tetalon = hdr_arr[0]['FGH_TSP1']
+            
         # data = prefilter_correction(data,wave_axis_arr,rows,cols,imgdirx_flipped)
 
         # prefilter, _ = load_fits(prefilter_f)
@@ -655,9 +653,10 @@ def phihrt_pipe(input_json_file):
         # prefilter = prefilter[rows,cols]
         
         if cavity is not None:
-            data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity[rows,cols])
+            data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],Tetalon=Tetalon,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity[rows,cols])
         else:
-            data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity)
+            data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],Tetalon=Tetalon,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=None)
+            # data = prefilter_correctionNew(data,wave_axis_arr,rows,cols,Tetalon=Tetalon,imgdirx_flipped = 'YES')
         # DC 20221109 test for Smitha. PF already removed from the flat
         # wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True)
         # wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0]) 
@@ -832,20 +831,22 @@ def phihrt_pipe(input_json_file):
             
             ##################################################################
             """new Icont normalization removing high magnetic field regions"""
-            AR_temp = np.ones(Ic_temp.shape,dtype=bool)
-            # automatic bins looking at max std of the continuum polarization
-            lim = np.max((data[Ic_temp,1:,cpos_arr[0],scan]).std(axis=(0,1)))*7
-            bins = np.linspace(-lim,lim,150)
+            # AR_temp = np.ones(Ic_temp.shape,dtype=bool)
+            # # automatic bins looking at max std of the continuum polarization
+            # lim = np.max((data[Ic_temp,1:,cpos_arr[0],scan]).std(axis=(0,1)))*7
+            # bins = np.linspace(-lim,lim,150)
 
-            for p in range(1,4):
-                hi = np.histogram(data[Ic_temp,p,:,scan].flatten(),bins=bins)
-                gval = gaussian_fit(hi, show = False)
-                AR_temp *= np.max(np.abs(data[:,:,p,:,scan] - gval[1]),axis=-1) < 5*gval[2]
+            # for p in range(1,4):
+            #     hi = np.histogram(data[Ic_temp,p,:,scan].flatten(),bins=bins)
+            #     gval = gaussian_fit(hi, show = False)
+            #     AR_temp *= np.max(np.abs(data[:,:,p,:,scan] - gval[1]),axis=-1) < 5*gval[2]
 
-            AR_temp = np.asarray(AR_temp, dtype=bool)
+            # AR_temp = np.asarray(AR_temp, dtype=bool)
             
-            # erosion and dilation to remove small scale masked elements
-            AR_temp = ~binary_dilation(binary_erosion(~AR_temp.copy(),generate_binary_structure(2,2), iterations=3),generate_binary_structure(2,2), iterations=3)
+            # # erosion and dilation to remove small scale masked elements
+            # AR_temp = ~binary_dilation(binary_erosion(~AR_temp.copy(),generate_binary_structure(2,2), iterations=3),generate_binary_structure(2,2), iterations=3)
+
+            AR_temp = ARmasking(data[...,scan], Ic_temp, cpos = cpos_arr[scan])
             ##################################################################
             
             I_c[scan] = np.mean(data[Ic_temp*AR_temp,0,cpos_arr[0],int(scan)])
@@ -1028,8 +1029,12 @@ def phihrt_pipe(input_json_file):
 
             # deconvolution on modulated data
             # dat, _ = demod_hrt(data[...,scan],pmp_temp,modulate=True)
+            if cpos_arr[scan] == 5: # set continuum in the first wavelength for the deconvolution
+                data[...,scan] = np.roll(data[...,scan], 1, axis = -1)
             res_stokes, coefs = fran_restore(data[...,scan], datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), 
                                              mask=mask, gamma2=0.02, low_f=0.8, aberr_cor=PSFaberr)
+            if cpos_arr[scan] == 5: # set continuum back in its position
+                res_stokes = np.roll(res_stokes, -1, axis = -1)
             # res_stokes, _ = demod_hrt(res_stokes,pmp_temp)
 
             data[...,scan] = res_stokes

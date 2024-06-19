@@ -18,27 +18,27 @@ def setup_header(hdr_arr):
     hdr_arr
         Updated header array
     """
-    k = ['CAL_FLAT','CAL_USH','SIGM_USH','CAL_TEMP',
+    k = ['CAL_FLAT','CAL_FNUM','CAL_USH','SIGM_USH','CAL_TEMP',
     'CAL_PRE','CAL_GHST','CAL_PREG','CAL_REAL',
     'CAL_CRT0','CAL_CRT1','CAL_CRT2','CAL_CRT3','CAL_CRT4','CAL_CRT5',
     'CAL_CRT6','CAL_CRT7','CAL_CRT8','CAL_CRT9',
     'CAL_WREG','CAL_NORM','CAL_FRIN','CAL_PSF','CAL_ZER','CAL_IPOL',
-    'CAL_SCIP','RTE_MOD','RTE_SW','RTE_ITER','VERS_CAL']
+    'CAL_CAVM','CAL_SCIP','RTE_MOD','RTE_SW','RTE_ITER','VERS_CAL']
 
-    v = [0,' ',' ','False',
+    v = [0,24,' ',' ','False',
     ' ','None ','None','NA',
     0,0,0,0,0,0,
     0,0,0,0,
     'None',' ','NA','NA','NA',' ',
-    'None',' ',' ',4294967295, hdr_arr[0]['VERS_SW'][1:4]]
+    'None','None',' ',' ',4294967295, hdr_arr[0]['VERS_SW'][1:4]]
 
-    c = ['Onboard calibrated for gain table','Unsharp masking correction','Sigma for unsharp masking [px]','Wavelengths correction for FG temperature',
+    c = ['Onboard calibrated for gain table','Unsharp masking correction','Number of flat field frames used','Sigma for unsharp masking [px]','Wavelengths correction for FG temperature',
     'Prefilter correction (DID/file)','Ghost correction (name + version of module)',
          'Polarimetric registration','Prealigment of images before demodulation',
     'cross-talk from I to Q (slope)','cross-talk from I to Q (offset)','cross-talk from I to U (slope)','cross-talk from I to U (offset)','cross-talk from I to V (slope)','cross-talk from I to V (offset)',
     'cross-talk from V to Q (slope)','cross-talk from V to Q (offset)','cross-talk from V to U (slope)','cross-talk from V to U (offset)','Wavelength Registration',
     'Normalization (normalization constant PROC_Ic)','Fringe correction (name + version of module)','PSF deconvolution','Zernike coefficients (rad)','Onboard calibrated for instrumental polarizatio',
-    'Onboard scientific data analysis','Inversion mode','Inversion software','Number RTE inversion iterations', 'Version of calibration pack']
+    'Cavity map used during inversion','Onboard scientific data analysis','Inversion mode','Inversion software','Number RTE inversion iterations', 'Version of calibration pack']
 
     for h in hdr_arr:
         for i in range(len(k)):
@@ -547,7 +547,7 @@ def flat_correction(data,flat,flat_states,cpos_arr,flat_pmp_temp=50,rows=slice(0
         printc("ERROR, Unable to apply flat fields",color=bcolors.FAIL)
 
 
-def prefilter_correctionNew(data,wave_axis_arr,rows,cols,imgdirx_flipped = 'YES'):
+def prefilter_correctionNew(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_flipped = 'YES'):
     """
     New prefilter correction based on JH email on 2023-08-17
     Based on on-ground measurements at Meudon
@@ -583,7 +583,9 @@ def prefilter_correctionNew(data,wave_axis_arr,rows,cols,imgdirx_flipped = 'YES'
     wlref = 6173.341
 
     for scan in range(data.shape[-1]):
-        prefilter = profile(wave_axis_arr[scan]-wlref) # [wl,y,x]
+        # prefilter = profile(wave_axis_arr[scan]-wlref) # [wl,y,x]
+        # DC 20240612
+        prefilter = profile(wave_axis_arr[scan]-wlref-(Tetalon-66)*34.25e-3) # [wl,y,x] # Temperature shift of the prefilter by TO
         prefilter = np.moveaxis(prefilter[...,np.newaxis],0,-1) # [y,x,1,wl]
         if imgdirx_flipped == 'YES':
             printc('Flipping prefilter on the Y axis')
@@ -591,7 +593,7 @@ def prefilter_correctionNew(data,wave_axis_arr,rows,cols,imgdirx_flipped = 'YES'
         data[...,scan] /= prefilter
     return data
 
-def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None, TemperatureCorrection=True, TemperatureConstant = 36.46e-3, shift = None):
+def prefilter_correction(data,wave_axis_arr,prefilter,Tetalon=0,prefilter_voltages = None, TemperatureCorrection=True, TemperatureConstant = 40.323e-3, shift = None):
     """Apply prefilter correction to input data
 
     Parameters
@@ -647,6 +649,8 @@ def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None,
         
         ref_wavelength = 6173.341 # this shouldn't change
         prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength + TemperatureConstant*(Tfg-61) - 0.002 # JH ref
+        # DC 20240612
+        prefilter_wave += (Tetalon-66)*34.25e-3 # Temperature shift of the prefilter by TO
         
         # ref_wavelength = round(6173.072 - (-1300*tunning_constant),3) # 6173.529. 0 level was different during e2e test
         # prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength # + temperature_constant_new*(Tfg-61)
@@ -1996,14 +2000,14 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         # previousKey = newKey
         # add voltage tuning constant keywords
         newKey = 'TUNCONS'
-        h.set(newKey, tunning_constant, f'[mAngstrom / Volt] voltage tuning constant', after=previousKey)
+        h.set(newKey, tunning_constant, f'[Angstrom / Volt] voltage tuning constant', after=previousKey)
         previousKey = newKey
         # add temperature tuning constant keywords
         newKey = 'TEMPCONS'
         if TemperatureCorrection:
-            h.set(newKey, TemperatureConstant, '[mAngstrom / Kelvin] temperature constant', after=previousKey)
+            h.set(newKey, TemperatureConstant, '[Angstrom / Kelvin] temperature constant', after=previousKey)
         else:
-            h.set(newKey, 0, '[mAngstrom / Kelvin] temperature constant', after=previousKey)
+            h.set(newKey, 0, '[Angstrom / Kelvin] temperature constant', after=previousKey)
         previousKey = newKey
 
         # dark file

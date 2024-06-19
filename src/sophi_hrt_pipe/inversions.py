@@ -367,18 +367,67 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
         sdata = np.einsum('yxpl->lpyx',sdata.copy())
         nwave, npol, ny, nx = sdata.shape
         
-        rte_invs = pym.phi_rte(sdata.copy(),
-                 wave_axis,
-                 rte_mode=rte,
-                 temp_dir=out_dir,
-                 cmd=cmd,
-                 options=options,
-                 weight=weight,
-                 mask=mask[:,:,scan],
-                 initial_model=initial_model,
-                 cavity=cavity,
-                 parallel=parallel, num_workers=num_workers)
+        # possibility to give two weights and/or initial_model
+        # first one for AR, second one for QS
+        Nw = 1
+        if isinstance(weight,list):
+            if len(weight) == 2:
+                Nw = 2
+        elif isinstance(weight,np.array):
+            if weight.shape[0] == 2:
+                Nw = 2
+        Nim = 1
+        if isinstance(initial_model,list):
+            if len(initial_model) == 2:
+                Nim = 2
+        elif isinstance(initial_model,np.array):
+            if initial_model.shape[0] == 2:
+                Nim = 2
+        
+        if Nw == 1 and Nim ==1:
+            rte_invs = pym.phi_rte(sdata.copy(),
+                    wave_axis,
+                    rte_mode=rte,
+                    temp_dir=out_dir,
+                    cmd=cmd,
+                    options=options,
+                    weight=weight,
+                    mask=mask[:,:,scan],
+                    initial_model=initial_model,
+                    cavity=cavity,
+                    parallel=parallel, num_workers=num_workers)
+        else:
+            if Nw == 1:
+                weight = [weight,weight]
+            if Nim == 1:
+                initial_model = [initial_model,initial_model]
+            # make AR mask
+            ar_mask = ARmasking(sdata, mask[:,:,scan], cpos=cpos_arr[scan], dilation_iter=5)
+            rte_invs0 = pym.phi_rte(sdata.copy(),
+                    wave_axis,
+                    rte_mode=rte,
+                    temp_dir=out_dir,
+                    cmd=cmd,
+                    options=options,
+                    weight=weight[0],
+                    mask=~ar_mask,
+                    initial_model=initial_model[0],
+                    cavity=cavity,
+                    parallel=parallel, num_workers=num_workers)
 
+            rte_invs1 = pym.phi_rte(sdata.copy(),
+                    wave_axis,
+                    rte_mode=rte,
+                    temp_dir=out_dir,
+                    cmd=cmd,
+                    options=options,
+                    weight=weight[1],
+                    mask=ar_mask,
+                    initial_model=initial_model[1],
+                    cavity=cavity,
+                    parallel=parallel, num_workers=num_workers)
+
+            rte_invs = rte_invs1*ar_mask+rte_invs0*(~ar_mask)
         # rte_invs = run_milos(sdata,wave_axis,RTE_code,rte,cpos_arr[0],
         #                      options=options,cavity_f=cavity_f,
         #                      rows=rows,cols=cols,
@@ -434,6 +483,8 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
             hdr_scan['RTE_ITER'] = str(30)
         else:
             hdr_scan['RTE_ITER'] = options[1]
+        if cavity_f is not None:
+            hdr_scan['CAL_CAVM'] = cavity_f
         hdr_scan.set('RTE_W', str(weight), 'Polarimetric weights used in the RTE code', after='RTE_ITER')
         hdr_scan.set('RTE_INIT', str(initial_model), 'Initial model used in the RTE code', after='RTE_ITER')
 

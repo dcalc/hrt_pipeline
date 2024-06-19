@@ -7,6 +7,7 @@ import scipy.signal as sps
 from datetime import datetime as dt
 import datetime
 import time
+from scipy.ndimage import binary_dilation, binary_erosion, generate_binary_structure
 
 from scipy.ndimage import map_coordinates
 from astropy import units as u
@@ -133,7 +134,7 @@ def get_data(path, scaling = True, bit_convert_scale = True, scale_data = True):
         raise ValueError()
        
 
-def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = True, TemperatureConstant = 36.46e-3, verbose = False):
+def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = True, TemperatureConstant = 40.323e-3, verbose = False):
     '''Open fits file, extract the wavelength axis and the continuum position, from Voltages in header
 
     Parameters
@@ -145,7 +146,7 @@ def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = True, Temperature
     TemperatureCorrection: bool
         if True, apply temperature correction to the wavelength axis
     TemperatureConstant: float
-        Temperature constant to be used when TemperatureCorrection is True. Default: 36.46e-3 Å/K. Suggested (old) value: 40.323e-3 Å/K
+        Temperature constant to be used when TemperatureCorrection is True. Default: 40.323e-3 Å/K. Suggested (old) value: 36.46e-3 Å/K
     verbose: bool
         if True, print the continuum position
     
@@ -625,6 +626,50 @@ def filling_data(arr, thresh, mode, axis = -1):
                     a0[:,i] = a1
     return a0
     
+def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_iter = 3, dilation_iter = 3):
+    """Creates a mask to cover active parts of the FoV
+    Parameters
+    ----------
+    stk : array
+        Stokes Vector
+    Initial_mask : array
+        Mask with off-limb or field_Stop excluded
+    cpos : int
+        continuum position (DEFAULT: 0)
+    bin_lim : float
+        number to be multiplied to the polarized std to se the maximum limit of the bins (DEFAULT: 7)
+    mask_lim : float
+        number of std that defines the contour of the mask (DEFAULT: 5)
+    erosion_iter : int
+        number of iterations for the erosion of the mask (DEFAULT: 3)
+    dilation_iter : int
+        number of iterations for the dilation of the mask (DEFAULT: 3)    
+
+    Returns
+    -------
+    array
+        AR_mask
+    """
+
+    AR_mask = initial_mask.copy()
+    # automatic bins looking at max std of the continuum polarization
+    if stk.shape[1] == 4:
+        stk = np.einsum('lpyx->yxpl',stk.copy())
+    lim = np.max((stk[:,:,1:,cpos]).std(axis=(0,1)))*bin_lim
+    bins = np.linspace(-lim,lim,150)
+
+    for p in range(1,4):
+        hi = np.histogram(stk[:,:,p].flatten(),bins=bins)
+        gval = gaussian_fit(hi, show = False)
+        AR_mask *= np.max(np.abs(stk[:,:,p] - gval[1]),axis=-1) < mask_lim*gval[2]
+
+    AR_mask = np.asarray(AR_mask, dtype=bool)
+
+    # erosion and dilation to remove small scale masked elements
+    AR_mask = ~binary_dilation(binary_erosion(~AR_mask.copy(),generate_binary_structure(2,2), iterations=erosion_iter),
+                               generate_binary_structure(2,2), iterations=dilation_iter)
+    
+    return AR_mask
 
 def auto_norm(file_name):
     """This function is used to normalize the data from the fits extensions
@@ -953,7 +998,14 @@ def limb_fitting(img, hdr, field_stop, verbose=True, percent=False, fit_results=
             finder[fract*i:fract*(i+1),fract*j:fract*(j+1)] = finder_small[i,j]
         
     if side == '':
-        return None, sly, slx, side#, None, None
+        output = [None,sly,slx,side]
+        
+        if percent:
+            output += [None]
+        if fit_results:
+            output += [None]    
+
+        return output
     
     if 'N' in side or 'S' in side:
         img = np.moveaxis(img,0,1)
@@ -2703,12 +2755,12 @@ def show_image_array(arr, hdr, grayscales, row_labels=None,
         ax = axs[i, j]
         
         # Print color scale range
-        if i==0:
-            im = axs[i, j].imshow(im, cmap='gray', clim=grayscales[i],interpolation=None)
-            ax.text(0.05, 0.94, f'{grayscales[i][0]:.1f} - {grayscales[i][1]:.1f}', transform=ax.transAxes, color='white')
-        else:
-            im = axs[i, j].imshow(im, cmap='gray', vmin=mean+grayscales[i][0], vmax=mean+grayscales[i][1],interpolation=None)
-            ax.text(0.05, 0.94, f'{mean:.4f} $\pm$ {grayscales[i][1]:.3f}', transform=ax.transAxes, color='white')
+        # if i==0:
+        im = axs[i, j].imshow(im, cmap='gray', clim=grayscales[i],interpolation=None)
+        ax.text(0.05, 0.94, f'{grayscales[i][0]:.1f} - {grayscales[i][1]:.1f}', transform=ax.transAxes, color='white')
+        # else:
+        #     im = axs[i, j].imshow(im, cmap='gray', vmin=mean+grayscales[i][0], vmax=mean+grayscales[i][1],interpolation=None)
+        #     ax.text(0.05, 0.94, f'{mean:.4f} $\pm$ {grayscales[i][1]:.3f}', transform=ax.transAxes, color='white')
 
     # Set row labels
     if row_labels is not None:
