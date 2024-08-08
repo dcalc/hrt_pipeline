@@ -483,8 +483,8 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
             hdr_scan['RTE_ITER'] = str(30)
         else:
             hdr_scan['RTE_ITER'] = options[1]
-        if cavity_f is not None:
-            hdr_scan['CAL_CAVM'] = cavity_f
+        # if cavity_f is not None:
+        #     hdr_scan['CAL_CAVM'] = cavity_f
         hdr_scan.set('RTE_W', str(weight), 'Polarimetric weights used in the RTE code', after='RTE_ITER')
         hdr_scan.set('RTE_INIT', str(initial_model), 'Initial model used in the RTE code', after='RTE_ITER')
 

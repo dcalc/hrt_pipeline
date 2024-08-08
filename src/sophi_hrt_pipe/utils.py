@@ -172,7 +172,7 @@ def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = True, Temperature
         header = hdu_list[fg_head].data
         tunning_constant = float(header[0][4])/1e9
         ref_wavelength = float(header[0][5])/1e3
-        Tfg = hdu_list[0].header['FGH_TSP1'] #temperature of the FG
+        Tfg = hdu_list[0].header['FGOV1PT1'] # ['FGH_TSP1'] #temperature of the FG
         
         try:
             voltagesData = np.zeros(num_wl)
@@ -661,7 +661,7 @@ def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_it
     for p in range(1,4):
         hi = np.histogram(stk[:,:,p].flatten(),bins=bins)
         gval = gaussian_fit(hi, show = False)
-        AR_mask *= np.max(np.abs(stk[:,:,p] - gval[1]),axis=-1) < mask_lim*gval[2]
+        AR_mask *= np.max(np.abs(stk[:,:,p] - gval[1]),axis=-1) < mask_lim*abs(gval[2])
 
     AR_mask = np.asarray(AR_mask, dtype=bool)
 
@@ -902,7 +902,7 @@ def limb_fitting(img, hdr, field_stop, verbose=True, percent=False, fit_results=
     verbose : bool, optional
         Print limb fitting results, by default True
     percent : bool, optional
-        return mask with 90% of the readius, by default False
+        return mask with 96% of the readius, by default False
     fit_results : bool, optional
         return results of the circular fit, by default False
 
@@ -910,11 +910,14 @@ def limb_fitting(img, hdr, field_stop, verbose=True, percent=False, fit_results=
     -------
     mask100: numpy.ndarray
         masked array (ie off disc region) with 100% of the radius
-     sly: slice
+    sly: slice
         slice in y direction to be used for normalisation (ie good pixels on disc)
     slx: slice
         slice in x direction to be used for normalisation (ie good pixels on disc)
     side: str
+        limb side
+    mask96: numpy.ndarray
+        masked array (ie off disc region) with 96% of the radius (only if percent = True)
     """
     def _residuals(p,x,y):
         """
@@ -1956,7 +1959,7 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45'):
         return hmi_map
 
 
-def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undistortion = False, logpol=False, allDID=False,verbose=False, deriv = True, values_only = False):
+def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undistortion = False, logpol=False, allDID=False,verbose=False, deriv = True, values_only = False, subregion = None):
     """This function saves new version of the fits file with updated WCS.
     It works by correlating HRT data on remapped HMI data. 
     This function exports the nearest HMI data from JSOC. [Not downloaded to out_dir]
@@ -1990,7 +1993,8 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
         if True, correlation is computed using the derivative of the image (DEFAULT: True)
     values_only: bool
         if True, new fits will not be saved (DEFAULT: False).
-
+    subregion: tuple, None
+        if None, automatic subregion. Accepted values are only tuples of slices (sly,slx)
     Returns
     -------
     ht: astropy.io.fits.header.Header
@@ -2091,9 +2095,12 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
 
     try:
         while np.any(np.abs(shift)>5e-2):
-
-            sly, slx = subregion_selection(ht,start_row,start_col,original_shape,dsmax = 512)
-            print('Subregion size:',sly.stop-sly.start)
+            
+            if subregion is not None:
+                sly,slx = subregion
+            else:
+                sly, slx = subregion_selection(ht,start_row,start_col,original_shape,dsmax = 512)
+                print('Subregion size:',sly.stop-sly.start)
 
             if remapping == 'remap':
                 phi_map = sunpy.map.Map((und_phi,ht))
@@ -2288,8 +2295,8 @@ def cavity_shifts(cavity_f, wave_axis,rows,cols,returnWL = True):
 
     Parameters
     ----------
-    cavity_f : str
-        path to cavity map fits file
+    cavity_f : str or array
+        path to cavity map fits file or cavity array (already cropped)
     wave_axis : array
         wavelength axis
     rows : array
@@ -2302,15 +2309,21 @@ def cavity_shifts(cavity_f, wave_axis,rows,cols,returnWL = True):
     new_wave_axis[rows, cols]: array
         wavelength axis with the cavity shifts applied to the respective pixels
     """
-    cavityMap, _ = load_fits(cavity_f) # cavity maps
-    if cavityMap.ndim == 3:
-        cavityWave = cavityMap[:,rows,cols].mean(axis=0)
+    if isinstance(cavity_f,str):
+        cavityMap, _ = load_fits(cavity_f) # cavity maps
+        if cavityMap.ndim == 3:
+            cavityWave = cavityMap[:,rows,cols].mean(axis=0)
+        else:
+            cavityWave = cavityMap[rows,cols]
     else:
-        cavityWave = cavityMap[rows,cols]
-     
-    new_wave_axis = wave_axis[np.newaxis,np.newaxis] - cavityWave[...,np.newaxis]
-
+        cavityMap = cavity_f
+        if cavityMap.ndim == 3:
+            cavityWave = cavityMap.mean(axis=0)
+        else:
+            cavityWave = cavityMap
+        
     if returnWL:
+        new_wave_axis = wave_axis[np.newaxis,np.newaxis] - cavityWave[...,np.newaxis]
         return new_wave_axis
     else:
         return cavityWave
@@ -2755,9 +2768,12 @@ def show_image_array(arr, hdr, grayscales, row_labels=None,
         ax = axs[i, j]
         
         # Print color scale range
-        # if i==0:
         im = axs[i, j].imshow(im, cmap='gray', clim=grayscales[i],interpolation=None)
-        ax.text(0.05, 0.94, f'{grayscales[i][0]:.1f} - {grayscales[i][1]:.1f}', transform=ax.transAxes, color='white')
+        if i == 0:
+            ax.text(0.05, 0.94, f'{grayscales[i][0]:.1f} - {grayscales[i][1]:.1f}', transform=ax.transAxes, color='white')
+        else:
+            ax.text(0.05, 0.94, f'{grayscales[i][0]:.3f} - {grayscales[i][1]:.3f}', transform=ax.transAxes, color='white')
+        # ax.text(0.05, 0.94, f'{grayscales[i][0]:.1f} - {grayscales[i][1]:.1f}', transform=ax.transAxes, color='white')
         # else:
         #     im = axs[i, j].imshow(im, cmap='gray', vmin=mean+grayscales[i][0], vmax=mean+grayscales[i][1],interpolation=None)
         #     ax.text(0.05, 0.94, f'{mean:.4f} $\pm$ {grayscales[i][1]:.3f}', transform=ax.transAxes, color='white')

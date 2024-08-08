@@ -111,7 +111,7 @@ def phihrt_pipe(input_json_file):
     SPGYlib
 
     '''
-    version = 'V1.8.4 June 19th 2024'
+    version = 'V1.8.6 August 8th 2024'
 
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
     printc('PHI HRT data reduction software  ',bcolors.OKGREEN)
@@ -290,10 +290,10 @@ def phihrt_pipe(input_json_file):
                 hdr_arr[scan].set(newKey, round(wave_axis_arr[scan][i],3), f'[Angstrom] {i+1}. wavelength of observation', after=previousKey)
                 previousKey = newKey
             # add voltage keywords
-            for i in range(6):
-                newKey = f'VOLTAGE{i+1}'
-                hdr_arr[scan].set(newKey, int(voltagesData_arr[scan][i]), f'[Volt] {i+1}. voltage of observation', after=previousKey)
-                previousKey = newKey
+            # for i in range(6):
+                # newKey = f'VOLTAGE{i+1}'
+                # hdr_arr[scan].set(newKey, int(voltagesData_arr[scan][i]), f'[Volt] {i+1}. voltage of observation', after=previousKey)
+                # previousKey = newKey
             # add continuum position keywords
             newKey = 'CONTPOS' # as implemented by DG
             hdr_arr[scan].set(newKey, int(cpos_arr[scan]//5), 'Continuum pos 0 = blue,1 = red,-1 = undef', after=previousKey)
@@ -440,7 +440,7 @@ def phihrt_pipe(input_json_file):
     # READ CAVITY MAPS
     #-----------------
 
-    if cavity_f is not None:
+    if cavity_c:
         
         cavity = cavity_shifts(cavity_f,wave_axis_arr[0],slice(0,flat.shape[0]),slice(0,flat.shape[1]),False)
 
@@ -541,7 +541,7 @@ def phihrt_pipe(input_json_file):
         if flat_c:
             wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)
             wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0])
-            Tetalon_flat = header_flat['FGH_TSP1']
+            Tetalon_flat = header_flat['FGOV1PT1'] # ['FGH_TSP1']
             flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],prefilter,Tetalon=Tetalon_flat,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity)[...,0]
             # flat = prefilter_correctionNew(flat[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),Tetalon=Tetalon_flat,imgdirx_flipped = 'YES')[...,0]
         
@@ -599,7 +599,8 @@ def phihrt_pipe(input_json_file):
 
         else:
             flat = normalise_flat(flat, slice(0,2048), slice(0,2048))
-
+            # Test for temporary flat
+            # flat = normalise_flat(flat, rows, cols)
             print(" ")
             printc('-->>>>>>> Normalising flats over whole FOV',color=bcolors.WARNING)
         
@@ -642,7 +643,7 @@ def phihrt_pipe(input_json_file):
         printc('-->>>>>>> Prefilter Correction On Data AFTER FLAT FIELDING',color=bcolors.OKGREEN)
         # prefilter_c = True
         start_time = time.perf_counter()
-        Tetalon = hdr_arr[0]['FGH_TSP1']
+        Tetalon = hdr_arr[0]['FGOV1PT1'] # ['FGH_TSP1']
             
         # data = prefilter_correction(data,wave_axis_arr,rows,cols,imgdirx_flipped)
 
@@ -742,14 +743,6 @@ def phihrt_pipe(input_json_file):
         printc('-->>>>>>> No frame registration (--> ISS ON)',color=bcolors.WARNING)
 
     #-----------------
-    # PSF DECONVOLUTION ON MODULATED DATA
-    #-----------------
-    
-    # was a considered option - now DEPRECATED
-    # decided not the ideal case
-    # applied on demodulated data
-
-    #-----------------
     # APPLY DEMODULATION 
     #-----------------
 
@@ -804,7 +797,7 @@ def phihrt_pipe(input_json_file):
                     Ic_temp *= field_stop[rows,cols]
                     Ic_temp = np.where(Ic_temp>0,1,0) #final making sure
 
-                    #for use later in the RTE
+                    #for use later in the CT correction
                     limb_temp = np.where(limb_temp>0,1,0)
                     limb_mask[...,scan] = limb_temp 
                     limb_percent_temp = np.where(limb_percent_temp>0,1,0)
@@ -827,7 +820,10 @@ def phihrt_pipe(input_json_file):
                 Ic_temp *= field_stop[rows,cols]
                 limb_mask *= field_stop[rows,cols,np.newaxis]
                 limb_percent_mask *= field_stop[rows,cols,np.newaxis]
+            
             Ic_temp = np.array(Ic_temp, dtype=bool)
+            limb_mask = np.array(limb_mask, dtype=bool)
+            limb_percent_mask = np.array(limb_percent_mask, dtype=bool)
             
             ##################################################################
             """new Icont normalization removing high magnetic field regions"""
@@ -846,10 +842,10 @@ def phihrt_pipe(input_json_file):
             # # erosion and dilation to remove small scale masked elements
             # AR_temp = ~binary_dilation(binary_erosion(~AR_temp.copy(),generate_binary_structure(2,2), iterations=3),generate_binary_structure(2,2), iterations=3)
 
-            AR_temp = ARmasking(data[...,scan], Ic_temp, cpos = cpos_arr[scan])
+            AR_temp = ARmasking(data[...,scan], limb_percent_mask[:,:,scan], cpos = cpos_arr[scan])
             ##################################################################
             
-            I_c[scan] = np.mean(data[Ic_temp*AR_temp,0,cpos_arr[0],int(scan)])
+            I_c[scan] = np.nanmean(data[Ic_temp*AR_temp,0,cpos_arr[0],int(scan)])
             data[:,:,:,:,scan] = data[:,:,:,:,scan]/I_c[scan]
             Ic_mask[...,scan] = Ic_temp
             AR_mask[...,scan] = AR_temp
@@ -1031,8 +1027,14 @@ def phihrt_pipe(input_json_file):
             # dat, _ = demod_hrt(data[...,scan],pmp_temp,modulate=True)
             if cpos_arr[scan] == 5: # set continuum in the first wavelength for the deconvolution
                 data[...,scan] = np.roll(data[...,scan], 1, axis = -1)
-            res_stokes, coefs = fran_restore(data[...,scan], datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), 
-                                             mask=mask, gamma2=0.02, low_f=0.8, aberr_cor=PSFaberr)
+            restore_results = fran_restore(data[...,scan], datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), 
+                                             mask=mask, gamma2=0.02, low_f=0.8, aberr_cor=PSFaberr, cavity=cavity[rows,cols])
+            if cavity_c:
+                res_stokes, coefs, cavity = restore_results
+            else:
+                res_stokes, coefs = restore_results
+                cavity = None
+
             if cpos_arr[scan] == 5: # set continuum back in its position
                 res_stokes = np.roll(res_stokes, -1, axis = -1)
             # res_stokes, _ = demod_hrt(res_stokes,pmp_temp)
@@ -1064,19 +1066,19 @@ def phihrt_pipe(input_json_file):
     # SET MEDIAN TO ZERO
     #-----------------
 
-    # if norm_stokes:
-    #     print(" ")
-    #     printc('-->>>>>>> Set Median to 0',color=bcolors.OKGREEN)
-    #     for scan in range(data_shape[-1]):
-    #         maski = limb_mask[...,scan] * AR_mask[...,scan]
-    #         for l in range(data_shape[3]):
-    #                 PQm = np.median(data[maski>0,1,l,scan])
-    #                 PUm = np.median(data[maski>0,2,l,scan])
-    #                 PVm = np.median(data[maski>0,3,l,scan])
+    if norm_stokes:
+        print(" ")
+        printc('-->>>>>>> Set Median to 0',color=bcolors.OKGREEN)
+        for scan in range(data_shape[-1]):
+            maski = limb_mask[...,scan] * AR_mask[...,scan]
+            for l in range(data_shape[3]):
+                    PQm = np.median(data[maski>0,1,l,scan])
+                    PUm = np.median(data[maski>0,2,l,scan])
+                    PVm = np.median(data[maski>0,3,l,scan])
 
-    #                 data[:,:,1,l,scan] -= PQm
-    #                 data[:,:,2,l,scan] -= PUm
-    #                 data[:,:,3,l,scan] -= PVm
+                    data[:,:,1,l,scan] -= PQm
+                    data[:,:,2,l,scan] -= PUm
+                    data[:,:,3,l,scan] -= PVm
                     
     #-----------------
     # WRITE OUT STOKES VECTOR
@@ -1193,9 +1195,11 @@ def phihrt_pipe(input_json_file):
             hdr_arr[count]['BUNIT'] = 'I_CONT'
             hdr_arr[count]['DATAMIN'] = int(np.min(data[:,:,:,:,count]))
             hdr_arr[count]['DATAMAX'] = int(np.max(data[:,:,:,:,count]))
+            if cavity_c:
+                hdr_arr[count]['CAL_CAVM'] = cavity_f
             hdr_arr[count] = data_hdr_kw(hdr_arr[count], data[:,:,:,:,count]) #add datamedn, datamean etc
             hdr_interm = hdr_arr[count].copy()
-            hdr_arr[count]['HISTORY'] = f"Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {ItoQUV}. PSF deconvolution: {hdr_arr[count]['CAL_PSF']}"
+            hdr_arr[count]['HISTORY'] = f"Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {ItoQUV}. PSF deconvolution: {hdr_arr[count]['CAL_PSF']}. Cavity correction: {cavity_c}"
             
             with fits.open(scan) as hdu_list:
                 print(f"Writing out stokes file as: {stokes_file}")
@@ -1242,7 +1246,7 @@ def phihrt_pipe(input_json_file):
 
         generate_l2(data_f, hdr_arr, wave_axis_arr, cpos_arr, 
                     data, mask, imgdirx_flipped, out_rte_filename, out_dir, 
-                    [None,cavity_f][cavity_c], rows, cols, vrs,
+                    cavity, rows, cols, vrs,
                     **RTE_options)
                     
         # if pymilos_opt:

@@ -4,6 +4,8 @@ astropy==4.0.2
 matplotlib==3.3.1
 requests==2.24.0
 python-dotenv==0.14.0
-opencv-python==4.6.0.66
 cmasher==1.6.0
 Cython==3.0.2
+photutils
+pandas
+opencv

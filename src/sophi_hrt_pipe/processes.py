@@ -1922,7 +1922,7 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         # temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
         # temperature_constant_new = 36.46e-3 # value from HSref_wavelength = 6173.341 # this shouldn't change
         ref_wavelength = 6173.341
-        Tfg = h['FGH_TSP1']
+        Tfg = h['FGOV1PT1'] # ['FGH_TSP1']
         Volt = fits.open(data_f)[3].data['PHI_FG_voltage'][0]
         if TemperatureCorrection:
             wl = Volt * tunning_constant + ref_wavelength + TemperatureConstant*(Tfg-61)

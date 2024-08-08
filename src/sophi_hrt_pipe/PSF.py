@@ -858,7 +858,7 @@ def is_notebook() -> bool:
         return False      # Probably standard Python interpreter
 
 def stokes_restoration(stokes_data,coefs,rest='lofdahl', gamma2=0.1,denoise=False,
-                       wind_opt=True, low_f=0.1,num_iter=10,aberr_cor=False,padding=True):
+                       wind_opt=True, low_f=0.1,num_iter=10,aberr_cor=False,padding=True,cavity=None):
     """
     This function restores a cube of Stokes data from a given set of
     Zernike coefficients.
@@ -877,7 +877,7 @@ def stokes_restoration(stokes_data,coefs,rest='lofdahl', gamma2=0.1,denoise=Fals
         wind_opt (True or False): True to apodize the images.
         low_f: cut-off frequency of the noise filter in the function 'filter_sch'w
         num_iter: number of iterations if the Lucy-Richardson option is enable.
-
+        cavity
     """
     size = stokes_data[:,:,0,0].shape[0]
     # if size < 2048:
@@ -955,9 +955,23 @@ def stokes_restoration(stokes_data,coefs,rest='lofdahl', gamma2=0.1,denoise=Fals
 
     #We extract only the subfield we are interested in
     res_stokes = res_stokes[pad_width:res_stokes.shape[0]-pad_width,pad_width:res_stokes.shape[1]-pad_width] #* edge_mask[:,:,np.newaxis,np.newaxis]
-    return res_stokes
 
-def edge_masking(stokes, mask):
+    if cavity is not None:
+        print('-->>>>>>> PSF deconvolution on Cavity Map')
+        im0 = cavity #* edge_mask
+        im0 = np.pad(im0, pad_width=((pad_width, pad_width), (pad_width, pad_width)),\
+                        mode='symmetric')
+        if rest=='lofdahl':
+            noise=noise_filt
+        res_cavity,susf,noise_filt=object_estimate(im0,coefs,0,
+                        reg=gamma2,wind=wind_opt,low_f=low_f,noise=noise,aberr_cor=aberr_cor)
+        res_cavity = res_cavity[pad_width:res_cavity.shape[0]-pad_width,pad_width:res_cavity.shape[1]-pad_width]
+    else:
+        res_cavity = None
+    
+    return res_stokes, res_cavity
+
+def edge_masking(stokes, mask, cavity=None):
     """
     This function masks the field stop and the off-limb area with the closest value to the mask
     # stokes (y,x,p,l)
@@ -983,9 +997,13 @@ def edge_masking(stokes, mask):
             for p in range(4):
                 stokes_edge[mask==0,p,l] = gaussian_filter(stokes_edge[:,:,p,l],20,mode='reflect')[mask==0]
     
-    return stokes_edge
+    if cavity is not None:
+        cavity[yf,xf] = cavity[ye[idx],xe[idx]]
+        cavity[mask==0] = gaussian_filter(cavity,20,mode='reflect')[mask==0]
+    
+    return stokes_edge, cavity
 
-def fran_restore(stokes_data, tobs, mask=None, rest='lofdahl', gamma2 = 0.1, low_f=0.1, denoise=False, num_iter=10, aberr_cor = False, padding=True):
+def fran_restore(stokes_data, tobs, mask=None, rest='lofdahl', gamma2 = 0.1, low_f=0.1, denoise=False, num_iter=10, aberr_cor = False, padding=True, cavity=None):
     #Input parameters
     # mask=None # mask of the field_stop and limb
     # rest='lofdahl' #'lofdahl','lucy-richardson'or 'unsupervised_wiener'. Type of restoration (Here only lofdahl is implemented)
@@ -998,7 +1016,9 @@ def fran_restore(stokes_data, tobs, mask=None, rest='lofdahl', gamma2 = 0.1, low
     # ext='.fits' 
     # ffolder='./fits/Windows/stokes/HRT-TEST-DATA-DECONVOLUTION'#Folder containing the FITS file
     # aberr_corr=False # if True, convolution with Airy disk is applied
-    
+    # padding=True # if True, Padding is applied
+    # cavity=None # if cavity array is given, then it is deconvolved
+
     #Restoration parameters
     wind_opt=True #True to apodize the image
 
@@ -1058,17 +1078,22 @@ def fran_restore(stokes_data, tobs, mask=None, rest='lofdahl', gamma2 = 0.1, low
     # stokes_data=ima
 
     if mask is not None:
-        stokes_data_edge = edge_masking(stokes_data, mask)
+        stokes_data_edge, cavity = edge_masking(stokes_data, mask, cavity)
     else:
         stokes_data_edge = stokes_data.copy()
 
 
-    res_stokes=stokes_restoration(stokes_data_edge,coefs,rest=rest, gamma2=gamma2,
+    res_stokes, res_cavity=stokes_restoration(stokes_data_edge,coefs,rest=rest, gamma2=gamma2,
                                     denoise=denoise,
                                     wind_opt=wind_opt,low_f=low_f,
-                                    num_iter=num_iter, aberr_cor=aberr_cor,padding=padding)
+                                    num_iter=num_iter, aberr_cor=aberr_cor,padding=padding, cavity=cavity)
     
     if mask is not None:
         res_stokes[mask==0] = stokes_data[mask==0]
+        if res_cavity is not None:
+            res_cavity[mask==0] = res_cavity[mask==0]
     
-    return res_stokes, coefs
+    if res_cavity is not None:
+        return res_stokes, coefs, res_cavity
+    else:
+        return res_stokes, coefs
