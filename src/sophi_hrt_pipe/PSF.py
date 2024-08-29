@@ -1029,7 +1029,7 @@ def fran_restore(stokes_data, tobs, mask=None, rest='lofdahl', gamma2 = 0.1, low
     # yf=600
 
     import csv
-    file_name = '/data/slam/home/calchetti/hrt_pipeline/csv/2023_PD_result.csv'
+    file_name = '/data/slam/home/calchetti/hrt_pipeline/csv/PD_result.csv'
     f = open(file_name,'r')
     reader = csv.reader(f,delimiter=',')
     Z = {}

@@ -1959,7 +1959,7 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45'):
         return hmi_map
 
 
-def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undistortion = False, logpol=False, allDID=False,verbose=False, deriv = True, values_only = False, subregion = None):
+def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undistortion = False, logpol=False, allDID=False,verbose=False, deriv = True, values_only = False, subregion = None, crota_manual_correction = 0.15):
     """This function saves new version of the fits file with updated WCS.
     It works by correlating HRT data on remapped HMI data. 
     This function exports the nearest HMI data from JSOC. [Not downloaded to out_dir]
@@ -1995,6 +1995,8 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
         if True, new fits will not be saved (DEFAULT: False).
     subregion: tuple, None
         if None, automatic subregion. Accepted values are only tuples of slices (sly,slx)
+    crota_manual_correction: float
+        manual change to HRT CROTA value (deg). The value is added to the original one (DEFAULT: 0.15)
     Returns
     -------
     ht: astropy.io.fits.header.Header
@@ -2020,6 +2022,8 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
     start_col = int(h_phi['PXBEG1']-1)
     _,_,_,cpos = fits_get_sampling(file_name)
     
+    h_phi = rotate_header(h_phi.copy(),-crota_manual_correction, center=center_coord(h_phi))
+
     if phi.ndim == 3:
         phi = phi[cpos*4]
     elif phi.ndim == 4:
@@ -2186,10 +2190,10 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
     if remapping == 'remap':
         phi_map = sunpy.map.Map((und_phi,ht))
 
-        bl = phi_map.pixel_to_world(slx.start*u.pix, sly.start*u.pix)
-        tr = phi_map.pixel_to_world((slx.stop-1)*u.pix, (sly.stop-1)*u.pix)
-        phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
-                            top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
+        # bl = phi_map.pixel_to_world(slx.start*u.pix, sly.start*u.pix)
+        # tr = phi_map.pixel_to_world((slx.stop-1)*u.pix, (sly.stop-1)*u.pix)
+        # phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
+        #                     top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
 
         hmi_remap = remap(phi_map, hmi_map, out_shape = (2048,2048), verbose=False)
         
@@ -2197,11 +2201,11 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
         ht['DATE-OBS'] = h_phi['DATE-OBS']
         phi_map = sunpy.map.Map((und_phi,ht))
 
-        top_right = hmi_remap.world_to_pixel(tr)
-        bottom_left = hmi_remap.world_to_pixel(bl)
-        tr_hmi_map = np.array([top_right.x.value,top_right.y.value])
-        bl_hmi_map = np.array([bottom_left.x.value,bottom_left.y.value])
-        hmi_map_wcs = hmi_remap.submap(bl_hmi_map*u.pix,top_right=tr_hmi_map*u.pix)
+        # top_right = hmi_remap.world_to_pixel(tr)
+        # bottom_left = hmi_remap.world_to_pixel(bl)
+        # tr_hmi_map = np.array([top_right.x.value,top_right.y.value])
+        # bl_hmi_map = np.array([bottom_left.x.value,bottom_left.y.value])
+        # hmi_map_wcs = hmi_remap.submap(bl_hmi_map*u.pix,top_right=tr_hmi_map*u.pix)
 
     elif remapping == 'ccd':
         phi_map = sunpy.map.Map((und_phi,ht))
@@ -2217,6 +2221,14 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
     
     
     if verbose:
+        if remapping == 'remap':
+            bl = phi_map.pixel_to_world(slx.start*u.pix, sly.start*u.pix)
+            tr = phi_map.pixel_to_world((slx.stop-1)*u.pix, (sly.stop-1)*u.pix)
+            top_right = hmi_remap.world_to_pixel(tr)
+            bottom_left = hmi_remap.world_to_pixel(bl)
+            tr_hmi_map = np.array([top_right.x.value,top_right.y.value])
+            bl_hmi_map = np.array([bottom_left.x.value,bottom_left.y.value])
+            hmi_map_wcs = hmi_remap.submap(bl_hmi_map*u.pix,top_right=tr_hmi_map*u.pix)
         fig = plt.figure(figsize=(10,6))
         ax1 = fig.add_subplot(1, 2, 1, projection=hmi_map_wcs)
         hmi_map_wcs.plot(axes=ax1, title='SDO/HMI image as seen from PHI/HRT')

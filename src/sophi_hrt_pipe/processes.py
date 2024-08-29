@@ -1845,7 +1845,7 @@ def create_intermediate_hdr(data, hdr_interm, history_str, file_name, **kwargs):
     return hdr
 
 
-def write_out_intermediate(data_int, hdr_interm, history_str, scan, root_scan_name, suffix, out_dir, **kwargs):
+def write_out_intermediate(data_int, hdr_interm, history_str, scan, root_scan_name, suffix, version, out_dir, **kwargs):
     """Write out intermediate files to output directory
 
     Parameters
@@ -1862,6 +1862,8 @@ def write_out_intermediate(data_int, hdr_interm, history_str, scan, root_scan_na
         root file name of the intermediate file to be written
     suffix: str
         suffix to be added to the intermediate file name
+    version: str
+        version of the file
     out_dir: str
         output directory
     **kwargs: dict
@@ -1871,13 +1873,13 @@ def write_out_intermediate(data_int, hdr_interm, history_str, scan, root_scan_na
     -------
     None
     """
-    hdr_int = create_intermediate_hdr(data_int, hdr_interm, history_str, f'{root_scan_name}_{suffix}.fits', **kwargs)
+    hdr_int = create_intermediate_hdr(data_int, hdr_interm, history_str, f'{suffix}_V{version}_{root_scan_name}.fits', **kwargs)
 
     with fits.open(scan) as hdu_list:
-        print(f"Writing intermediate file as: {root_scan_name}_{suffix}.fits")
+        print(f"Writing intermediate file as: {suffix}_V{version}_{root_scan_name}.fits")
         hdu_list[0].data = data_int.astype(np.float32)
         hdu_list[0].header = hdr_int #update the calibration keywords
-        hdu_list.writeto(out_dir + root_scan_name + f'_{suffix}.fits', overwrite=True)
+        hdu_list.writeto(out_dir + f'{suffix}_V{version}_{root_scan_name}.fits', overwrite=True)
 
         
 def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, TemperatureCorrection = False, TemperatureConstant = 36.46e-3, level = 'CAL2', version = 'V01', out_dir = None):   

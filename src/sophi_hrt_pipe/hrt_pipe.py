@@ -111,7 +111,7 @@ def phihrt_pipe(input_json_file):
     SPGYlib
 
     '''
-    version = 'V1.8.6 August 8th 2024'
+    version = 'V1.8.7 August 29th 2024'
 
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
     printc('PHI HRT data reduction software  ',bcolors.OKGREEN)
@@ -284,10 +284,21 @@ def phihrt_pipe(input_json_file):
                 print(f"This scan has been flipped in the Y axis to conform to orientation standards. \n File: {data_f[scan]}")
 
             # add wavelength keywords
+            hdr_arr[scan]['WAVEMIN'] = round(wave_axis_arr[scan][0],3)
+            hdr_arr[scan]['WAVEMAX'] = round(wave_axis_arr[scan][-1],3)
             previousKey = 'WAVEMAX'
+            # WAVEBAND entry
+            newKey = 'WAVEBAND' # new implementation
+            hdr_arr[scan].set(newKey, 'FE6173', 'Bandpass description', after=previousKey)
+            previousKey = newKey
+            # WAVELNTH entry
+            newKey = 'WAVELNTH' # new implementation
+            hdr_arr[scan].set(newKey, 6173.341, '[Angstrom] Characteristic wavelength', after=previousKey)
+            previousKey = newKey
+            
             for i in range(6):
-                newKey = f'WAVE{i+1}'
-                hdr_arr[scan].set(newKey, round(wave_axis_arr[scan][i],3), f'[Angstrom] {i+1}. wavelength of observation', after=previousKey)
+                newKey = 'WAVELN'+str(int(i)+1).rjust(2,'0')
+                hdr_arr[scan].set(newKey, round(wave_axis_arr[scan][i],3), '[Angstrom] Wavelength '+str(int(i)+1).rjust(2,'0'), after=previousKey)
                 previousKey = newKey
             # add voltage keywords
             # for i in range(6):
@@ -295,19 +306,22 @@ def phihrt_pipe(input_json_file):
                 # hdr_arr[scan].set(newKey, int(voltagesData_arr[scan][i]), f'[Volt] {i+1}. voltage of observation', after=previousKey)
                 # previousKey = newKey
             # add continuum position keywords
-            newKey = 'CONTPOS' # as implemented by DG
-            hdr_arr[scan].set(newKey, int(cpos_arr[scan]//5), 'Continuum pos 0 = blue,1 = red,-1 = undef', after=previousKey)
+            # newKey = 'CONTPOS' # as implemented by DG
+            # hdr_arr[scan].set(newKey, int(cpos_arr[scan]//5), 'Continuum pos 0 = blue,1 = red,-1 = undef', after=previousKey)
+            # previousKey = newKey
+            newKey = 'CONTPOS' # new implementation
+            hdr_arr[scan].set(newKey, int(cpos_arr[scan])+1, 'Index to WAVELNnn (-1 = undef)', after=previousKey)
             previousKey = newKey
             # add voltage tuning constant keywords
             newKey = 'TUNCONS'
-            hdr_arr[scan].set(newKey, tuning_constant_arr[scan], f'[mAngstrom / Volt] voltage tuning constant', after=previousKey)
+            hdr_arr[scan].set(newKey, tuning_constant_arr[scan], f'[Angstrom / Volt] voltage tuning constant', after=previousKey)
             previousKey = newKey
             # add temperature tuning constant keywords
             newKey = 'TEMPCONS'
             if TemperatureCorrection:
-                hdr_arr[scan].set(newKey, TemperatureConstant, '[mAngstrom / Kelvin] temperature constant', after=previousKey)
+                hdr_arr[scan].set(newKey, TemperatureConstant, '[Angstrom / Kelvin] temperature constant', after=previousKey)
             else:
-                hdr_arr[scan].set(newKey, 0, '[mAngstrom / Kelvin] temperature constant', after=previousKey)
+                hdr_arr[scan].set(newKey, 0, '[Angstrom / Kelvin] temperature constant', after=previousKey)
             previousKey = newKey
 
             # change NAXIS1, 2, WAVEMIN, and MAX comments
@@ -997,6 +1011,10 @@ def phihrt_pipe(input_json_file):
     #-----------------
 
     if PSFstokes:
+
+        if out_intermediate:
+            data_not_deconvolved = data.copy()
+        
         start_time = time.perf_counter()
         
         print(" ")
@@ -1112,7 +1130,8 @@ def phihrt_pipe(input_json_file):
     if out_intermediate: 
         #intermediate output with their own header, so they can be easily used as input for the pipeline
         for count, scan in enumerate(data_f):
-            root_scan_name = scan_name_list[count]
+            # root_scan_name = scan_name_list[count]
+            root_scan_name = hdr_arr[count]['PHIDATID']
             hdr_arr[count]['DATE'] = ntime.strftime("%Y-%m-%dT%H:%M:%S")
             hdr_interm = hdr_arr[count].copy()
 
@@ -1121,14 +1140,14 @@ def phihrt_pipe(input_json_file):
                 file_suffix = 'dark_corrected'
                 tmp = data_darkc[:,:,:,:,count]
                 tmp = np.moveaxis(tmp, [-1,-2], [0,1])
-                write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, out_dir)
+                write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, vrs, out_dir)
             
             if prefilter_c:
                 history_str =  f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {False}, Unsharp: {False}. Flat norm: {False}. I->QUV ctalk: {False}. PSF deconvolution: {False}"
                 file_suffix = 'prefilter_corrected'
                 tmp = data_PFc[:,:,:,:,count]
                 tmp = np.moveaxis(tmp, [-1,-2], [0,1])
-                write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, out_dir)
+                write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, vrs, out_dir)
 
             if flat_c: 
                 history_str = f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {False}. PSF deconvolution: {False}"
@@ -1136,7 +1155,7 @@ def phihrt_pipe(input_json_file):
                 file_suffix =  'flat_corrected'
                 tmp = data_flatc[:,:,:,:,count]
                 tmp = np.moveaxis(tmp, [-1,-2], [0,1])
-                write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, out_dir)
+                write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, vrs, out_dir)
                 #without US
                 # root_scan_name_before_US = f"copy_{flat_f.split('/')[-1]}"
                 # file_suffix = ''
@@ -1147,7 +1166,14 @@ def phihrt_pipe(input_json_file):
                 file_suffix = 'demodulated'
                 tmp = data_demod_normed[:,:,:,:,count]
                 tmp = np.moveaxis(tmp, [-1,-2], [0,1])
-                write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, out_dir, bunit = 'I_CONT', btype = 'STOKES')
+                write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, vrs, out_dir, bunit = 'I_CONT', btype = 'STOKES')
+
+            if PSFstokes:
+                history_str = f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {ItoQUV}. PSF deconvolution: {True}"
+                file_suffix = 'stokes_noPSF'
+                tmp = data_not_deconvolved[:,:,:,:,count]
+                tmp = np.moveaxis(tmp, [-1,-2], [0,1])
+                write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, vrs, out_dir, bunit = 'I_CONT', btype = 'STOKES')
 
     else:
         print(" ")
