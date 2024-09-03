@@ -59,6 +59,15 @@ pymilos/pymilos.c
 pymilos/pymilos.cpython*
 pymilos/build/
 pymilos/build/*
+pymilos/lib/*.o
 pymilos/pymilos.egg-info/
 pymilos/pymilos.egg-info/*
 pymilos/.nfs*
+milos
+milos/*
+pymilos_old
+pymilos_old/*
+rte_inter.py
+csv/2023_PD_result_*.csv
+p-milos*
+p-milos*/

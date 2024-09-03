@@ -6,11 +6,11 @@ import scipy.optimize as spo
 import scipy.signal as sps
 from datetime import datetime as dt
 import datetime
+import time
+from scipy.ndimage import binary_dilation, binary_erosion, generate_binary_structure
 
-from astropy.constants import c, R_sun
 from scipy.ndimage import map_coordinates
 from astropy import units as u
-from astropy.coordinates import SkyCoord
 from astropy.wcs import WCS
 
 class bcolors:
@@ -134,7 +134,7 @@ def get_data(path, scaling = True, bit_convert_scale = True, scale_data = True):
         raise ValueError()
        
 
-def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = False, verbose = False):
+def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = True, TemperatureConstant = 40.323e-3, verbose = False):
     '''Open fits file, extract the wavelength axis and the continuum position, from Voltages in header
 
     Parameters
@@ -145,6 +145,8 @@ def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = False, verbose = 
         number of wavelength
     TemperatureCorrection: bool
         if True, apply temperature correction to the wavelength axis
+    TemperatureConstant: float
+        Temperature constant to be used when TemperatureCorrection is True. Default: 40.323e-3 Å/K. Suggested (old) value: 36.46e-3 Å/K
     verbose: bool
         if True, print the continuum position
     
@@ -170,7 +172,7 @@ def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = False, verbose = 
         header = hdu_list[fg_head].data
         tunning_constant = float(header[0][4])/1e9
         ref_wavelength = float(header[0][5])/1e3
-        Tfg = hdu_list[0].header['FGH_TSP1'] #temperature of the FG
+        Tfg = hdu_list[0].header['FGOV1PT1'] # ['FGH_TSP1'] #temperature of the FG
         
         try:
             voltagesData = np.zeros(num_wl)
@@ -203,12 +205,11 @@ def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = False, verbose = 
         if verbose:
             printc('-->>>>>>> If FG temperature is not 61, the relation wl = wlref + V * tunning_constant is not valid anymore',color=bcolors.WARNING)
             printc('          Use instead: wl =  wlref + V * tunning_constant + temperature_constant_new*(Tfg-61)',color=bcolors.WARNING)
-        temperature_constant_old = 40.323e-3 # old temperature constant, still used by Johann
-        temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
-        # wave_axis += temperature_constant_old*(Tfg-61)
-        wave_axis += temperature_constant_new*(Tfg-61) # 20221123 see cavity_maps.ipynb with example
-        # voltagesData += np.round((temperature_constant_old-temperature_constant_new)*(Tfg-61)/tunning_constant,0)
-
+        # temperature_constant_old = 40.323e-3 # old temperature constant, still used by Johann
+        # temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
+        # temperature_constant_new = 36.46e-3 # value from HS
+        wave_axis += TemperatureConstant*(Tfg-61) # 20221123 see cavity_maps.ipynb with example
+        
     return wave_axis,voltagesData,tunning_constant,cpos
 
 
@@ -406,9 +407,16 @@ def check_pmp_temp(hdr_arr):
     -------
     pmp_temp : str
     """
-    first_pmp_temp = hdr_arr[0]['HPMPTSP1']
+    first_pmp_temp = int(hdr_arr[0]['HPMPTSP1'])
     result = all(hdr['HPMPTSP1'] == first_pmp_temp for hdr in hdr_arr)
     if (result):
+        t0 = time.strptime('2023-03-28T00:10:00','%Y-%m-%dT%H:%M:%S')
+        t1 = time.strptime('2023-03-30T00:10:00','%Y-%m-%dT%H:%M:%S')
+        tobs = time.strptime(hdr_arr[0]['DATE-OBS'][:-4],'%Y-%m-%dT%H:%M:%S')
+        
+        if (tobs > t0 and tobs < t1):
+            first_pmp_temp = 50
+            printc('WARNING: Data acquired on 2023-03-28 and 2023-03-29 have a PMP temperature setting to 40 deg, but the PMP are fluctuating at ~45 deg \nException to HRT pipeline to use the 50 deg demodulation matrix.',color=bcolors.WARNING)
         print(f"All the scan(s) have the same PMP Temperature Set Point: {first_pmp_temp}")
         pmp_temp = str(first_pmp_temp)
         return pmp_temp
@@ -618,6 +626,50 @@ def filling_data(arr, thresh, mode, axis = -1):
                     a0[:,i] = a1
     return a0
     
+def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_iter = 3, dilation_iter = 3):
+    """Creates a mask to cover active parts of the FoV
+    Parameters
+    ----------
+    stk : array
+        Stokes Vector
+    Initial_mask : array
+        Mask with off-limb or field_Stop excluded
+    cpos : int
+        continuum position (DEFAULT: 0)
+    bin_lim : float
+        number to be multiplied to the polarized std to se the maximum limit of the bins (DEFAULT: 7)
+    mask_lim : float
+        number of std that defines the contour of the mask (DEFAULT: 5)
+    erosion_iter : int
+        number of iterations for the erosion of the mask (DEFAULT: 3)
+    dilation_iter : int
+        number of iterations for the dilation of the mask (DEFAULT: 3)    
+
+    Returns
+    -------
+    array
+        AR_mask
+    """
+
+    AR_mask = initial_mask.copy()
+    # automatic bins looking at max std of the continuum polarization
+    if stk.shape[1] == 4:
+        stk = np.einsum('lpyx->yxpl',stk.copy())
+    lim = np.max((stk[:,:,1:,cpos]).std(axis=(0,1)))*bin_lim
+    bins = np.linspace(-lim,lim,150)
+
+    for p in range(1,4):
+        hi = np.histogram(stk[:,:,p].flatten(),bins=bins)
+        gval = gaussian_fit(hi, show = False)
+        AR_mask *= np.max(np.abs(stk[:,:,p] - gval[1]),axis=-1) < mask_lim*abs(gval[2])
+
+    AR_mask = np.asarray(AR_mask, dtype=bool)
+
+    # erosion and dilation to remove small scale masked elements
+    AR_mask = ~binary_dilation(binary_erosion(~AR_mask.copy(),generate_binary_structure(2,2), iterations=erosion_iter),
+                               generate_binary_structure(2,2), iterations=dilation_iter)
+    
+    return AR_mask
 
 def auto_norm(file_name):
     """This function is used to normalize the data from the fits extensions
@@ -655,7 +707,8 @@ def mu_angle(hdr,coord=None):
     hdr : header or filename
         header of the fits file or filename path
     coord : array, optional
-        pixel location for which the mu angle is found (if None: center of the FoV), by default None
+        pixel location (x,y) for which the mu angle is found (if None: center of the FoV), by default None.
+        Shape has to be (2,Npix)
 
     Returns
     -------
@@ -670,10 +723,11 @@ def mu_angle(hdr,coord=None):
     
     if coord is None:
         coord = np.asarray([(hdr['PXEND1']-hdr['PXBEG1'])/2,
-                            (hdr['PXEND2']-hdr['PXBEG2'])/2])
-    
-    coord -= center[:2]
+                            (hdr['PXEND2']-hdr['PXBEG2'])/2]) - center[:2]
+    else:
+        coord -= center[:2,np.newaxis]
     mu = np.sqrt(Rpix**2 - (coord[0]**2 + coord[1]**2)) / Rpix
+    
     return mu
 
 def center_coord(hdr):
@@ -688,45 +742,31 @@ def center_coord(hdr):
     -------
     center: [x,y,1] coordinates of the solar disk center (units: pixel)
     """
-    pxbeg1 = hdr['PXBEG1']
-    pxend1 = hdr['PXEND1']
-    pxbeg2 = hdr['PXBEG2']
-    pxend2 = hdr['PXEND2']
-    coord=np.asarray([hdr['CRPIX1']-1,
-            hdr['CRPIX2']-1,
-           1])
-    # X axis flipping is not considered in PXEND1, PXBEG1 and CRPIX1 (FIXED)
-    # coord=np.asarray([(2048 - (hdr['CRPIX1'] + hdr['PXBEG1']) + 1) - 1,
-    #         hdr['CRPIX2']-1,
-    #        1])
+    pxsc = hdr['CDELT1']
+    # sun_dist_m=(hdr['DSUN_AU']*u.AU).to(u.m).value #Earth
+    # sun_dist_AU=hdr['DSUN_AU'] #Earth
+    # rsun = hdr['RSUN_REF'] # m
+    # pxbeg1 = hdr['PXBEG1']
+    # pxend1 = hdr['PXEND1']
+    # pxbeg2 = hdr['PXBEG2']
+    # pxend2 = hdr['PXEND2']
+    crval1 = hdr['CRVAL1']
+    crval2 = hdr['CRVAL2']
+    crpix1 = hdr['CRPIX1']
+    crpix2 = hdr['CRPIX2']
+    PC1_1 = hdr['PC1_1']
+    PC1_2 = hdr['PC1_2']
+    PC2_1 = hdr['PC2_1']
+    PC2_2 = hdr['PC2_2']
+        
+    HPC1 = 0
+    HPC2 = 0
     
-    angle = hdr['CROTA'] # positive angle = clock-wise rotation of the reference system axes 
-    rad = angle * np.pi/180
-    rot = np.asarray([[np.cos(rad),-np.sin(rad),0],[np.sin(rad),np.cos(rad),0],[0,0,1]])
-    rc = [(pxend1-pxbeg1)/2,(pxend2-pxbeg2)/2] # CRPIX from 1 to 2048, so 1024.5 is the center
-
-    tr = np.asarray([[1,0,rc[0]],[0,1,rc[1]],[0,0,1]])
-    invtr = np.asarray([[1,0,-rc[0]],[0,1,-rc[1]],[0,0,1]])
-    M = tr @ rot @ invtr
-
-    coord = (M @ coord)[:2]
-
-    # center of the sun in the rotated reference system
-    center=np.asarray([coord[0]-hdr['CRVAL1']/hdr['CDELT1']-1,
-                       coord[1]-hdr['CRVAL2']/hdr['CDELT2']-1,
-                       1])
-    # rotation of the sun center back to the original reference system
-    angle = -hdr['CROTA'] # positive angle = clock-wise rotation of the reference system axes 
-    rad = angle * np.pi/180
-    rot = np.asarray([[np.cos(rad),-np.sin(rad),0],[np.sin(rad),np.cos(rad),0],[0,0,1]])
+    x0 = crpix1 + 1/pxsc * (PC1_1*(HPC1-crval1) - PC1_2*(HPC2-crval2)) - 1
+    y0 = crpix2 + 1/pxsc * (PC2_2*(HPC2-crval2) - PC2_1*(HPC1-crval1)) - 1
     
-    tr = np.asarray([[1,0,rc[0]],[0,1,rc[1]],[0,0,1]])
-    invtr = np.asarray([[1,0,-rc[0]],[0,1,-rc[1]],[0,0,1]])
-    M = tr @ rot @ invtr
+    return np.asarray([x0,y0,1])
 
-    center = (M @ center)
-    
-    return center
 
 
 def circular_mask(h, w, center, radius):
@@ -848,7 +888,7 @@ def limb_side_finder(img, hdr,verbose=True,outfinder=False):
         return side, center, Rpix, sly, slx
 
 
-def limb_fitting(img, hdr, field_stop, verbose=True):
+def limb_fitting(img, hdr, field_stop, verbose=True, percent=False, fit_results=False):
     """Fits limb to the image using least squares method.
 
     Parameters
@@ -861,16 +901,23 @@ def limb_fitting(img, hdr, field_stop, verbose=True):
         field stop array
     verbose : bool, optional
         Print limb fitting results, by default True
+    percent : bool, optional
+        return mask with 96% of the readius, by default False
+    fit_results : bool, optional
+        return results of the circular fit, by default False
 
     Returns
     -------
     mask100: numpy.ndarray
         masked array (ie off disc region) with 100% of the radius
-     sly: slice
+    sly: slice
         slice in y direction to be used for normalisation (ie good pixels on disc)
     slx: slice
         slice in x direction to be used for normalisation (ie good pixels on disc)
     side: str
+        limb side
+    mask96: numpy.ndarray
+        masked array (ie off disc region) with 96% of the radius (only if percent = True)
     """
     def _residuals(p,x,y):
         """
@@ -954,7 +1001,14 @@ def limb_fitting(img, hdr, field_stop, verbose=True):
             finder[fract*i:fract*(i+1),fract*j:fract*(j+1)] = finder_small[i,j]
         
     if side == '':
-        return None, sly, slx, side#, None, None
+        output = [None,sly,slx,side]
+        
+        if percent:
+            output += [None]
+        if fit_results:
+            output += [None]    
+
+        return output
     
     if 'N' in side or 'S' in side:
         img = np.moveaxis(img,0,1)
@@ -983,11 +1037,22 @@ def limb_fitting(img, hdr, field_stop, verbose=True):
                               bounds = ([center[0]-150,center[1]-150,Rpix-50],[center[0]+150,center[1]+150,Rpix+50]))
         
     mask100 = circular_mask(img.shape[0],img.shape[1],[p.x[0],p.x[1]],p.x[2])
+
+    mask96 = circular_mask(img.shape[0],img.shape[1],[p.x[0],p.x[1]],p.x[2]*.96)
     
+    output = [sly,slx,side]
     if 'N' in side or 'S' in side:
-        return np.moveaxis(mask100,0,1), sly, slx, side
+        output = [np.moveaxis(mask100,0,1)] + output
+        if percent:
+            output += [np.moveaxis(mask96,0,1)]
     else:
-        return mask100, sly, slx, side
+        output = [mask100] + output
+        if percent:
+            output += [mask96]
+    if fit_results:
+        output += [p]    
+
+    return output
 
 def fft_shift(img,shift):
     """Shift an image in the Fourier domain and return the shifted image (non fourier domain)
@@ -1345,7 +1410,7 @@ def blos_noise(blos_file, iter=True, fs = None):
     if iter:
         ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
         try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,10.],eps=1e-4); p_iter[0] = pp[0]
+            p_iter, hi_iter = iter_noise(values,[1.,0.,10.],eps=1e-4); p_iter[0] = p[0]
             ax[1].plot(xx,gaus(xx,*p_iter),'g--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
             # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
         except:
@@ -1448,7 +1513,7 @@ def stokes_noise(stokes_file, iter=True):
     if iter:
         ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
         try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = pp[0]
+            p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = p[0]
             ax[1].plot(xx,gaus(xx,*p_iter),'g--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
             # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
         except:
@@ -1614,7 +1679,7 @@ def translate_header(h,tvec,mode='crpix'):
         print('mode not valid\nreturn old header')
     return h
 
-def image_register(ref,im,subpixel=True,deriv=False):
+def image_register(ref,im,subpixel=True,deriv=False,d=50):
     """
     credits: Marco Stangalini (2010, IDL version). Adapted for Python by Daniele Calchetti.
     """
@@ -1649,32 +1714,33 @@ def image_register(ref,im,subpixel=True,deriv=False):
                                 + c*((y-yo)**2)))
         return g.ravel()
 
-    def _gauss2dfit(a):
+    def _gauss2dfit(a,mask):
         import numpy as np
         from scipy.optimize import curve_fit
         sz = np.shape(a)
         X,Y = np.meshgrid(np.arange(sz[1])-sz[1]//2,np.arange(sz[0])-sz[0]//2)
-        try:
-            X = X[~X.mask]; Y = Y[~Y.mask]; a = a[~a.mask]
-        except:
-            pass
         c = np.unravel_index(a.argmax(),sz)
-        y = a[c[0],:]
-        x = X[c[0],:]
-        stdx = 5 #np.sqrt(abs(sum(y * (x - sum(x*y)/sum(y))**2) / sum(y)))
-        y = a[:,c[1]]
-        x = Y[:,c[1]]
-        stdy = 5 #np.sqrt(abs(sum(y * (x - sum(x*y)/sum(y))**2) / sum(y)))
+        Xf = X[mask>0]; Yf = Y[mask>0]; af = a[mask>0]
+
+        # y = a[c[0],:]
+        # x = X[c[0],:]
+        stdx = .5 #np.sqrt(abs(sum(y * (x - sum(x*y)/sum(y))**2) / sum(y)))
+        # y = a[:,c[1]]
+        # x = Y[:,c[1]]
+        stdy = .5 #np.sqrt(abs(sum(y * (x - sum(x*y)/sum(y))**2) / sum(y)))
         initial_guess = [np.median(a), np.max(a), stdx, stdy, c[1] - sz[1]//2, c[0] - sz[0]//2, 0]
-        popt, pcov = curve_fit(_g2d, (X, Y), a.ravel(), p0=initial_guess)
+        bounds = ([-1,-1,0,0,initial_guess[4]-1,initial_guess[5]-1,-180],
+                  [1,1,initial_guess[2]*4,initial_guess[2]*4,initial_guess[4]+1,initial_guess[5]+1,180])
+
+        popt, pcov = curve_fit(_g2d, (Xf, Yf), af.ravel(), p0=initial_guess,bounds=bounds)
         return np.reshape(_g2d((X,Y), *popt), sz), popt
     
     def _one_power(array):
         return array/np.sqrt((np.abs(array)**2).mean())
 
     if deriv:
-        ref = _image_derivative(ref)
-        im = _image_derivative(im)
+        ref = _image_derivative(ref - np.mean(ref))
+        im = _image_derivative(im - np.mean(im))
         
     shifts=np.zeros(2)
     FT1=fft.fftn(ref - np.mean(ref))
@@ -1684,10 +1750,20 @@ def image_register(ref,im,subpixel=True,deriv=False):
     r = fft.fftshift(r)
     rmax=np.max(r)
     ppp = np.unravel_index(np.argmax(r),ss)
-    shifts = [(ss[0]//2-(ppp[0])),(ss[1]//2-(ppp[1]))]
+    shifts = [ppp[0]-ss[0]//2,ppp[1]-ss[1]//2]
     if subpixel:
-        g, A = _gauss2dfit(r)
-        ss = np.shape(g)
+        dd = [d,75,100,30]
+        for d1 in dd:
+            try:
+                if d1>0:
+                    mask = circular_mask(ss[0],ss[1],[ppp[1],ppp[0]],d1)
+                else:
+                    mask = np.ones(ss,dtype=bool); d = ss[0]//2
+                g, A = _gauss2dfit(r,mask)
+            except RuntimeError as e:
+                print(f"Issue with gaussian fitting using mask with radius {d1}\nTrying new value...")
+                if d1 == dd[-1]:
+                    raise RuntimeError(e)
         shifts[0] = A[5]
         shifts[1] = A[4]
         del g
@@ -1761,7 +1837,7 @@ def remap(hrt_map, hmi_map, out_shape = (1024,1024), verbose = False):
     
     # reprojection
     hmi_origin = hmi_map
-    output, footprint = reproject_adaptive(hmi_origin, out_wcs, out_shape)
+    output, footprint = reproject_adaptive(hmi_origin, out_wcs, out_shape,kernel='Hann',boundary_mode='ignore')
     hmi_map = sunpy.map.Map(output, out_header)
     hmi_map.plot_settings = hmi_origin.plot_settings
 
@@ -1781,23 +1857,119 @@ def remap(hrt_map, hmi_map, out_shape = (1024,1024), verbose = False):
     
     return hmi_map
 
-def subregion_selection(ht,start_row,start_col,original_shape,dsmax = 512):
+def subregion_selection(ht,start_row,start_col,original_shape,dsmax = 512,edge = 20):
     intcrpix1 = int(round(ht['CRPIX1']))
     intcrpix2 = int(round(ht['CRPIX2']))
-    
-    ds = min(dsmax,intcrpix2-start_row,intcrpix1-start_col,original_shape[0]+start_row-intcrpix2,original_shape[1]+start_col-intcrpix1)
+    ds = min(dsmax,
+             intcrpix2-start_row-edge,
+             intcrpix1-start_col-edge,
+             original_shape[0]+start_row-intcrpix2-edge,
+             original_shape[1]+start_col-intcrpix1-edge)
     sly = slice(intcrpix2-ds,intcrpix2+ds)
     slx = slice(intcrpix1-ds,intcrpix1+ds)
     
     return sly, slx
 
-def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpol=False, allDID=False,verbose=False, values_only = False):
+def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45'):
+    """
+    Script to download the HMI m_45 or ic_45 cosest in time to the provided SO/PHI observation.
+    TAI convention and light travel time are taken into consideration.
+    
+    Parameters
+    ----------
+    ht: astropy.io.fits.header.Header
+        header of the SO/PHI observation
+    t_obs: str, datetime.datetime
+        observation time of the SO/PHI observation. A string can be provided, but it is expected to be isoformat
+    jsoc_email: str
+        email address to be used for JSOC connection
+    verbose: bool
+        if True, plot of the HMI map will be shown (DEFAULT: False)
+    path: bool
+        if True, the path of the cache directory and of the HMI dataset will return as output (DEFAULT: False)
+    """
+    
+    import drms
+    import sunpy, sunpy.map
+    from astropy.constants import c
+    
+    if type(t_obs) == str:
+        t_obs = datetime.datetime.fromisoformat(t_obs)
+    dtai = datetime.timedelta(seconds=37) # datetime.timedelta(seconds=94)
+    
+    if type(cad) != str:
+        cad = str(int(cad))
+    if cad == '45':
+        dcad = datetime.timedelta(seconds=35) # half HMI cadence (23) + margin
+    elif cad == '720':
+        dcad = datetime.timedelta(seconds=360+60) # half HMI cadence (23) + margin
+    else:
+        print('wrong HMI cadence, only 45 and 720 are accepted')
+        return None
+    
+    dltt = datetime.timedelta(seconds=ht['EAR_TDEL']) # difference in light travel time S/C-Earth
+
+    kwlist = ['T_REC','T_OBS','DATE-OBS','CADENCE','DSUN_OBS']
+    
+    client = drms.Client(email=jsoc_email, verbose=True) 
+
+    if ht['BTYPE'] == 'BLOS':
+        keys = client.query('hmi.m_'+cad+'s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
+                           (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
+    elif ht['BTYPE'] == 'VLOS':
+        keys = client.query('hmi.v_'+cad+'s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
+                           (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
+    else:
+        keys = client.query('hmi.ic_'+cad+'s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
+                           (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
+
+    lt = (np.mean(keys['DSUN_OBS'])*u.m - ht['DSUN_OBS']*u.m)/c
+    dltt = datetime.timedelta(seconds=lt.value) # difference in light travel time S/C-SDO
+    
+    
+    T_OBS = [np.abs((datetime.datetime.strptime(t,'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds()) for t in keys['T_OBS']]
+    ind = np.argmin(T_OBS)
+
+    if ht['BTYPE'] == 'BLOS':
+        name_h = 'hmi.m_'+cad+'s['+keys['T_REC'][ind]+']{Magnetogram}'
+    elif ht['BTYPE'] == 'VLOS':
+        name_h = 'hmi.v_'+cad+'s['+keys['T_REC'][ind]+']{Dopplergram}'
+    else:
+        name_h = 'hmi.ic_'+cad+'s['+keys['T_REC'][ind]+']{Continuum}'
+
+    if np.abs((datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds()) > np.ceil(int(cad)/2):
+        print('WARNING: Closer file exists but has not been found.')
+        print(name_h)
+        print('T_OBS:',datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
+        print('DATE-AVG:',t_obs)
+        print('')
+    else:
+        print('HMI T_OBS (corrected for TAI and Light travel time):',datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
+        print('PHI DATE-AVG:',t_obs)
+    s45 = client.export(name_h,protocol='fits')
+    hmi_map = sunpy.map.Map(s45.urls.url[0],cache=False)
+    cache_dir = sunpy.data.CACHE_DIR+'/'
+    hmi_name = cache_dir + s45.urls.url[0].split("/")[-1]
+
+    if verbose:
+        hmi_map.peek()
+    if path:
+        return hmi_map, cache_dir, hmi_name
+    else:
+        return hmi_map
+
+
+def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undistortion = False, logpol=False, allDID=False,verbose=False, deriv = True, values_only = False, subregion = None, crota_manual_correction = 0.15):
     """This function saves new version of the fits file with updated WCS.
     It works by correlating HRT data on remapped HMI data. 
     This function exports the nearest HMI data from JSOC. [Not downloaded to out_dir]
     Not validated on limb data. 
     Not tested on data with different viewing angle.
     icnt, stokes or ilam files are expected as input.
+    
+    Version: 1.0.0 (July 2022)
+             1.1.0 (August 2023)
+                Updates on data handling and correlation. New remapping function based on coordinates reprojecting functions.
 
     Parameters
     ----------
@@ -1807,47 +1979,59 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
         email address to be used for JSOC connection
     dir_out: str
         path to the output directory, DEFAULT: './', if None no file will be saved
+    remapping: str
+        type of remapping procedure. 'remap' uses the reprojection algorithm by DeForest, 'ccd' uses a coordinate translation from HMI to HRT based on function in this file (not working yet). DEFAULT: 'remap'
     undistortion: bool
         if True, HRT will be undistorted (DEFAULT: False).
     logpol: bool
-        if True, log-polar transform applied until agnle smaller than a threshold (DEFAULT: False).
+        (DEPRECATED) if True, log-polar transform applied until agnle smaller than a threshold (DEFAULT: False).
     allDID: bool
         if True, all the fits file with the same DID in the directory of the input file will be saved with the new WCS.
     verbose: bool
         if True, plot of the maps will be shown (DEFAULT: False)
+    deriv: bool
+        if True, correlation is computed using the derivative of the image (DEFAULT: True)
     values_only: bool
         if True, new fits will not be saved (DEFAULT: False).
-
+    subregion: tuple, None
+        if None, automatic subregion. Accepted values are only tuples of slices (sly,slx)
+    crota_manual_correction: float
+        manual change to HRT CROTA value (deg). The value is added to the original one (DEFAULT: 0.15)
     Returns
     -------
     ht: astropy.io.fits.header.Header
         new header for hrt
     """
-    import sunpy, drms, imreg_dft
+    import sunpy, imreg_dft
     import sunpy.map
-    from reproject import reproject_interp, reproject_adaptive
-    from sunpy.coordinates import get_body_heliographic_stonyhurst
-
+    # from reproject import reproject_interp, reproject_adaptive
+    # from sunpy.coordinates import get_body_heliographic_stonyhurst
+    
     from sunpy.coordinates import frames
     import warnings, sunpy
     warnings.filterwarnings("ignore", category=sunpy.util.SunpyMetadataWarning)
 
     
-    print('This is a preliminary procedure')
-    print('It has been optimized on raw, continuum and blos data')
-    print('This script is based on sunpy routines and examples')
+    # print('This is a preliminary procedure')
+    # print('It has been optimized on raw, continuum and blos data')
+    # print('This script is based on sunpy routines and examples')
     
     hdr_phi = fits.open(file_name)
     phi = hdr_phi[0].data; h_phi = hdr_phi[0].header
     start_row = int(h_phi['PXBEG2']-1)
     start_col = int(h_phi['PXBEG1']-1)
     _,_,_,cpos = fits_get_sampling(file_name)
-    original_shape = phi.shape
     
+    h_phi = rotate_header(h_phi.copy(),-crota_manual_correction, center=center_coord(h_phi))
+
     if phi.ndim == 3:
         phi = phi[cpos*4]
     elif phi.ndim == 4:
-        phi = phi[:,:,0,cpos]
+        if phi.shape[0] == 6:
+            phi = phi[cpos,0]            
+        else:
+            phi = phi[:,:,0,cpos]
+    original_shape = phi.shape
     
     if phi.shape[0] == 2048:
         if undistortion:
@@ -1859,6 +2043,7 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
     else:
         phi = np.pad(phi,[(start_row,2048-(start_row+phi.shape[0])),(start_col,2048-(start_row+phi.shape[1]))])
         h_phi['NAXIS1'] = 2048; h_phi['NAXIS2'] = 2048
+        h_phi['PXBEG1'] = 1; h_phi['PXBEG2'] = 1; h_phi['PXEND1'] = 2048; h_phi['PXEND2'] = 2048; 
         h_phi['CRPIX1'] += start_col; h_phi['CRPIX2'] += start_row
         if undistortion:
             und_phi = und(phi)
@@ -1882,52 +2067,16 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
         t0 = t0[0]
         
     t_obs = datetime.datetime.fromisoformat(t0)
-    
-    dtai = datetime.timedelta(seconds=37) # datetime.timedelta(seconds=94)
-    dcad = datetime.timedelta(seconds=35) # half HMI cadence (23) + margin
-    
-    dltt = datetime.timedelta(seconds=ht['EAR_TDEL']) # difference in light travel time S/C-Earth
-
-    kwlist = ['T_REC','T_OBS','DATE-OBS','CADENCE','DSUN_OBS']
+    if ht['BTYPE'] == 'BLOS':
+        t0 = ht['DATE-AVG']
+        t_obs = datetime.datetime.fromisoformat(ht['DATE-AVG'])
     
     try:
-        client = drms.Client(email=jsoc_email, verbose=True) 
-    
-        if ht['BTYPE'] == 'BLOS':
-            keys = client.query('hmi.m_45s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
-                               (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
-        else:
-            keys = client.query('hmi.ic_45s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
-                               (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=2)
-        
-        lt = (np.mean(keys['DSUN_OBS'])*u.m - phi_map.dsun).to(u.m)/c
-        dltt = datetime.timedelta(seconds=lt.value) # difference in light travel time S/C-SDO
-
-        ind = np.argmin([np.abs((datetime.datetime.strptime(t,'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds())
-                         for t in keys['T_OBS']])
-        
-        if ht['BTYPE'] == 'BLOS':
-            name_h = 'hmi.m_45s['+keys['T_REC'][ind]+']{Magnetogram}'
-        else:
-            name_h = 'hmi.ic_45s['+keys['T_REC'][ind]+']{Continuum}'
-
-        if np.abs((datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds()) > 23:
-            print('WARNING: Closer file exists but has not been found.')
-            print(name_h)
-            print('T_OBS:',datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
-            print('DATE-AVG:',t_obs)
-            print('')
-
-        s45 = client.export(name_h,protocol='fits')
-        hmi_map = sunpy.map.Map(s45.urls.url[0],cache=False)
-        cache_dir = "/home/calchetti/.cache/sunpy/"
-        hmi_name = cache_dir + s45.urls.url[0].split("/")[-1]
-        
-        if verbose:
-            hmi_map.peek()
-    except:
-        print("Issue with downloading HMI. The code stops here. Restults obtained so far will be saved")
-        return h_phi['CROTA'], h_phi['CRPIX1'] - start_col, h_phi['CRPIX2'] - start_row, h_phi['CRVAL1'], h_phi['CRVAL2'], t0, False
+        hmi_map, cache_dir, hmi_name = downloadClosestHMI(ht,t_obs,jsoc_email,verbose,True)
+    except Exception as e:
+        print("Issue with downloading HMI. The code stops here. Restults obtained so far will be saved. This was the error:")
+        print(e)
+        return h_phi['CROTA'], h_phi['CRPIX1'] - start_col, h_phi['CRPIX2'] - start_row, h_phi['CRVAL1'], h_phi['CRVAL2'], t0, False, None, None
         
     if verbose:
         hmi_map.peek()
@@ -1937,29 +2086,61 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
 
     ht = h_phi.copy()
     ht['DATE-BEG'] = ht['DATE-AVG']; ht['DATE-OBS'] = ht['DATE-AVG']
-    ht['DATE-BEG'] = datetime.datetime.isoformat(datetime.datetime.fromisoformat(ht['DATE-BEG']) + dltt)
-    ht['DATE-OBS'] = datetime.datetime.isoformat(datetime.datetime.fromisoformat(ht['DATE-OBS']) + dltt)
+    # ht['DATE-BEG'] = datetime.datetime.isoformat(datetime.datetime.fromisoformat(ht['DATE-BEG']) + dltt)
+    # ht['DATE-OBS'] = datetime.datetime.isoformat(datetime.datetime.fromisoformat(ht['DATE-OBS']) + dltt)
     shift = [1,1]
     i = 0
     angle = 1
-    match = False
+    match = True
     
+    # hgsPHI = ccd2HGS(phi_map.fits_header)
+    # hgsHMI = ccd2HGS(hmi_map.fits_header)
+    # hmi_remap = hmi2phi(hmi_map,phi_map)
+
     try:
         while np.any(np.abs(shift)>5e-2):
-            phi_map = sunpy.map.Map((und_phi,ht))
+            
+            if subregion is not None:
+                sly,slx = subregion
+            else:
+                sly, slx = subregion_selection(ht,start_row,start_col,original_shape,dsmax = 512)
+                print('Subregion size:',sly.stop-sly.start)
 
-            bl = phi_map.pixel_to_world(slx.start*u.pix, sly.start*u.pix)
-            tr = phi_map.pixel_to_world((slx.stop-1)*u.pix, (sly.stop-1)*u.pix)
-            phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
-                                  top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
+            if remapping == 'remap':
+                phi_map = sunpy.map.Map((und_phi,ht))
 
-            hmi_map_remap = remap(phi_map, hmi_map, out_shape = (2048,2048), verbose=False)
+                bl = phi_map.pixel_to_world(slx.start*u.pix, sly.start*u.pix)
+                tr = phi_map.pixel_to_world((slx.stop-1)*u.pix, (sly.stop-1)*u.pix)
+                phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
+                                    top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
 
-            top_right = hmi_map_remap.world_to_pixel(tr)
-            bottom_left = hmi_map_remap.world_to_pixel(bl)
-            tr_hmi_map = np.array([top_right.x.value,top_right.y.value])
-            bl_hmi_map = np.array([bottom_left.x.value,bottom_left.y.value])
-            hmi_map_wcs = hmi_map_remap.submap(bl_hmi_map*u.pix,top_right=tr_hmi_map*u.pix)
+                hmi_remap = remap(phi_map, hmi_map, out_shape = (2048,2048), verbose=False)
+
+                # necessary when the FoV is close to the HMI limb
+                temp0 = hmi_remap.data.copy(); temp0[np.isinf(temp0)] = 0; temp0[np.isnan(temp0)] = 0
+                hmi_remap = sunpy.map.Map((temp0, hmi_remap.fits_header))
+
+                top_right = hmi_remap.world_to_pixel(tr)
+                bottom_left = hmi_remap.world_to_pixel(bl)
+                tr_hmi_map = np.array([top_right.x.value,top_right.y.value])
+                bl_hmi_map = np.array([bottom_left.x.value,bottom_left.y.value])
+                slyhmi = slice(int(round(bl_hmi_map[1])),int(round(tr_hmi_map[1]))+1)
+                slxhmi = slice(int(round(bl_hmi_map[0])),int(round(tr_hmi_map[0]))+1)
+                hmi_map_wcs = hmi_remap.submap(bl_hmi_map*u.pix,top_right=tr_hmi_map*u.pix)
+
+            
+            elif remapping == 'ccd':
+                phi_map = sunpy.map.Map((und_phi,ht))
+                # hgsPHI = ccd2HGS(phi_map.fits_header)
+                
+                hmi_remap = sunpy.map.Map((hmi2phi(hmi_map,phi_map),ht))
+                
+                phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
+                                    top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
+                slyhmi = sly
+                slxhmi = slx
+                hmi_map_wcs = hmi_remap.submap(np.asarray([slx.start, sly.start])*u.pix,
+                                    top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
 
             ref = phi_submap.data.copy()
             temp = hmi_map_wcs.data.copy(); temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
@@ -1977,16 +2158,19 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
                 ht = translate_header(rotate_header(ht.copy(),-angle),shift,mode='crval')
 
             else:
-                while np.any(np.abs(s)>1e-3):
+                while np.any(np.abs(s)>1e-2) and it<10:
                     if it == 0 and ~logpol:
-                        _,s = image_register(ref,temp,True,False)
+                        _,s = image_register(ref,temp,False,deriv)
+                        if np.any(np.abs(s)==0):
+                            _,s = image_register(ref,temp,True,deriv)
                     else:
-                        sr, sc, _ = SPG_shifts_FFT(np.asarray([ref,temp])); s = [sr[1],sc[1]]
+                        _,s = image_register(ref,temp,True,deriv)
+                        # sr, sc, _ = SPG_shifts_FFT(np.asarray([ref,temp])); s = [sr[1],sc[1]]
                     shift = [shift[0]+s[0],shift[1]+s[1]]
-                    temp = fft_shift(hmi_map_wcs.data.copy(), shift); temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
+                    # temp = fft_shift(hmi_map_wcs.data.copy(), shift); temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
+                    temp = fft_shift(hmi_remap.data.copy(), shift)[slyhmi,slxhmi]; temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
                     it += 1
-                    if it == 10:
-                        break
+                    
                 hmi_map_shift = sunpy.map.Map((temp,hmi_map_wcs.fits_header))
 
                 ht = translate_header(ht.copy(),np.asarray(shift),mode='crval')
@@ -1995,17 +2179,56 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
             i+=1
             if i == 10:
                 print('Maximum iterations reached:',i)
+                match = False
                 break
-    except:
-        print("Issue with co-alignment. The code stops here. Restults obtained so far will be saved")
-        return ht['CROTA'], ht['CRPIX1'] - start_col, ht['CRPIX2'] - start_row, ht['CRVAL1'], ht['CRVAL2'], t0, False
+    except Exception as e:
+        printc("Issue with co-alignment. The code stops here. Restults obtained so far will be saved. This was the error:",bcolors.FAIL)
+        printc(e,bcolors.FAIL)
+        print(f'{it} iterations shift (x,y): {round(shift[1],2),round(shift[0],2)}',bcolors.FAIL)
+        return ht['CROTA'], ht['CRPIX1'] - start_col, ht['CRPIX2'] - start_row, ht['CRVAL1'], ht['CRVAL2'], t0, False, phi_map, hmi_remap
     
-    phi_map = sunpy.map.Map((und_phi,ht))
-    phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
-                               top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
+    if remapping == 'remap':
+        phi_map = sunpy.map.Map((und_phi,ht))
+
+        # bl = phi_map.pixel_to_world(slx.start*u.pix, sly.start*u.pix)
+        # tr = phi_map.pixel_to_world((slx.stop-1)*u.pix, (sly.stop-1)*u.pix)
+        # phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
+        #                     top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
+
+        hmi_remap = remap(phi_map, hmi_map, out_shape = (2048,2048), verbose=False)
+        
+        ht['DATE-BEG'] = h_phi['DATE-BEG']
+        ht['DATE-OBS'] = h_phi['DATE-OBS']
+        phi_map = sunpy.map.Map((und_phi,ht))
+
+        # top_right = hmi_remap.world_to_pixel(tr)
+        # bottom_left = hmi_remap.world_to_pixel(bl)
+        # tr_hmi_map = np.array([top_right.x.value,top_right.y.value])
+        # bl_hmi_map = np.array([bottom_left.x.value,bottom_left.y.value])
+        # hmi_map_wcs = hmi_remap.submap(bl_hmi_map*u.pix,top_right=tr_hmi_map*u.pix)
+
+    elif remapping == 'ccd':
+        phi_map = sunpy.map.Map((und_phi,ht))
+        hmi_remap = sunpy.map.Map((hmi2phi(hmi_map,phi_map),ht))
+        ht['DATE-BEG'] = h_phi['DATE-BEG']
+        ht['DATE-OBS'] = h_phi['DATE-OBS']
+        phi_map = sunpy.map.Map((und_phi,ht))
+
+        phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
+                            top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
+        hmi_map_wcs = hmi_remap.submap(np.asarray([slx.start, sly.start])*u.pix,
+                            top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
     
     
     if verbose:
+        if remapping == 'remap':
+            bl = phi_map.pixel_to_world(slx.start*u.pix, sly.start*u.pix)
+            tr = phi_map.pixel_to_world((slx.stop-1)*u.pix, (sly.stop-1)*u.pix)
+            top_right = hmi_remap.world_to_pixel(tr)
+            bottom_left = hmi_remap.world_to_pixel(bl)
+            tr_hmi_map = np.array([top_right.x.value,top_right.y.value])
+            bl_hmi_map = np.array([bottom_left.x.value,bottom_left.y.value])
+            hmi_map_wcs = hmi_remap.submap(bl_hmi_map*u.pix,top_right=tr_hmi_map*u.pix)
         fig = plt.figure(figsize=(10,6))
         ax1 = fig.add_subplot(1, 2, 1, projection=hmi_map_wcs)
         hmi_map_wcs.plot(axes=ax1, title='SDO/HMI image as seen from PHI/HRT')
@@ -2017,19 +2240,30 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
         ax2.coords[0].grid_lines_kwargs['edgecolor'] = 'k'
         ax2.coords[1].grid_lines_kwargs['edgecolor'] = 'k'
     
-    name = file_name.split('/')[-1]
-    new_name = name.split('L2')[0]+'L2.WCS'+name.split('L2')[1]
-    
     if os.path.isfile(hmi_name):
         os.remove(hmi_name)
+        import sqlite3
+        # creating file path
+        dbfile = cache_dir+'cache.db'
+        if os.path.isfile(dbfile):
+            # Create a SQL connection to our SQLite database
+            con = sqlite3.connect(dbfile)
+            # creating cursor
+            cur = con.cursor()
+            removeItem = "DELETE FROM cache_storage WHERE file_path = \'"+hmi_name+"\'"
+            cur.execute(removeItem)
+            con.commit()
         print(hmi_name.split("/")[-1]+' deleted')
     
     if values_only:
-        return ht['CROTA'], ht['CRPIX1'] - start_col, ht['CRPIX2'] - start_row, ht['CRVAL1'], ht['CRVAL2'], t0, match
+        return ht['CROTA'], ht['CRPIX1'] - start_col, ht['CRPIX2'] - start_row, ht['CRVAL1'], ht['CRVAL2'], t0, match, phi_map, hmi_remap
     else:
         if dir_out is not None:
             if allDID:
                 did = h_phi['PHIDATID']
+                name = file_name.split('/')[-1]
+                new_name = name.replace("_phi-",".WCS_phi-")
+    
                 directory = file_name[:-len(name)]
                 file_n = os.listdir(directory)
                 if type(did) != str:
@@ -2039,11 +2273,11 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
                 for n in l2_n:
                     f = [i for i in did_n if n in i][0]
                     name = f.split('/')[-1]
-                    new_name = name.split('L2')[0]+'L2.WCS'+name.split('L2')[1]
+                    new_name = name.replace("_phi-",".WCS_phi-")
                     with fits.open(f) as h:
                         h[0].header['CROTA'] = ht['CROTA']
-                        h[0].header['CRPIX1'] = ht['CRPIX1']
-                        h[0].header['CRPIX2'] = ht['CRPIX2']
+                        h[0].header['CRPIX1'] = ht['CRPIX1'] - start_col
+                        h[0].header['CRPIX2'] = ht['CRPIX2'] - start_row
                         h[0].header['CRVAL1'] = ht['CRVAL1']
                         h[0].header['CRVAL2'] = ht['CRVAL2']
                         h[0].header['PC1_1'] = ht['PC1_1']
@@ -2055,8 +2289,8 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
             else:
                 with fits.open(file_name) as h:
                     h[0].header['CROTA'] = ht['CROTA']
-                    h[0].header['CRPIX1'] = ht['CRPIX1']
-                    h[0].header['CRPIX2'] = ht['CRPIX2']
+                    h[0].header['CRPIX1'] = ht['CRPIX1'] - start_col
+                    h[0].header['CRPIX2'] = ht['CRPIX2'] - start_row
                     h[0].header['CRVAL1'] = ht['CRVAL1']
                     h[0].header['CRVAL2'] = ht['CRVAL2']
                     h[0].header['PC1_1'] = ht['PC1_1']
@@ -2065,16 +2299,16 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',undistortion = False, logpo
                     h[0].header['PC2_2'] = ht['PC2_2']
                     h[0].header['HISTORY'] = 'WCS corrected via HRT - HMI cross correlation '
                     h.writeto(dir_out+new_name, overwrite=True)
-        return ht['CROTA'], ht['CRPIX1'] - start_col, ht['CRPIX2'] - start_row, ht['CRVAL1'], ht['CRVAL2'], t0, match
+        return ht['CROTA'], ht['CRPIX1'] - start_col, ht['CRPIX2'] - start_row, ht['CRVAL1'], ht['CRVAL2'], t0, match, phi_map, hmi_remap
 ###############################################
 
-def cavity_shifts(cavity_f, wave_axis,rows,cols):
+def cavity_shifts(cavity_f, wave_axis,rows,cols,returnWL = True):
     """applies cavity shifts to the wave axis for use in RTE
 
     Parameters
     ----------
-    cavity_f : str
-        path to cavity map fits file
+    cavity_f : str or array
+        path to cavity map fits file or cavity array (already cropped)
     wave_axis : array
         wavelength axis
     rows : array
@@ -2087,16 +2321,43 @@ def cavity_shifts(cavity_f, wave_axis,rows,cols):
     new_wave_axis[rows, cols]: array
         wavelength axis with the cavity shifts applied to the respective pixels
     """
-    cavityMap, _ = load_fits(cavity_f) # cavity maps
-    if cavityMap.ndim == 3:
-        cavityWave = cavityMap[:,rows,cols].mean(axis=0)
+    if isinstance(cavity_f,str):
+        cavityMap, _ = load_fits(cavity_f) # cavity maps
+        if cavityMap.ndim == 3:
+            cavityWave = cavityMap[:,rows,cols].mean(axis=0)
+        else:
+            cavityWave = cavityMap[rows,cols]
     else:
-        cavityWave = cavityMap[rows,cols]
-     
-    new_wave_axis = wave_axis[np.newaxis,np.newaxis] - cavityWave[...,np.newaxis]
+        cavityMap = cavity_f
+        if cavityMap.ndim == 3:
+            cavityWave = cavityMap.mean(axis=0)
+        else:
+            cavityWave = cavityMap
+        
+    if returnWL:
+        new_wave_axis = wave_axis[np.newaxis,np.newaxis] - cavityWave[...,np.newaxis]
+        return new_wave_axis
+    else:
+        return cavityWave
 
-
-    return new_wave_axis
+def load_l2_stk(directory,did,version=None):
+    import glob
+    file_n = os.listdir(directory)
+    key = 'stokes'
+    if version is None:
+        version = '*'
+    datfile = glob.glob(os.path.join(directory, f'solo_L2_phi-hrt-{key}_*_{version}_{did}.fits.gz'))
+    if not(datfile):
+        print('No data found')
+        return np.empty([]), np.empty([])
+    else:
+        if len(datfile) == 1:
+            return fits.getdata(datfile[0],header=True)
+        else:
+            print('More than one file found:')
+            print(datfile)
+            print('Please specify the Version')
+            return np.empty([]), np.empty([])
 
 def load_l2_rte(directory,did,version=None):
     file_n = os.listdir(directory)
@@ -2118,31 +2379,6 @@ def load_l2_rte(directory,did,version=None):
     
     return rte_out
 
-def mu_angle(hdr,coord=None):
-    """
-    input
-    hdr: header or filename
-    coord: pixel for which the mu angle is found (if None: center of the FoV)
-    
-    output
-    mu = cosine of the heliocentric angle
-    """
-    if type(hdr) is str:
-        hdr = fits.getheader(hdr)
-    
-    center=center_coord(hdr)
-    Rpix=(hdr['RSUN_ARC']/hdr['CDELT1'])
-    
-    if coord is None:
-        coord = np.asarray([(hdr['PXEND1']-hdr['PXBEG1'])/2,
-                            (hdr['PXEND2']-hdr['PXBEG2'])/2])
-    else:
-        coord = np.asarray(coord,dtype=float)
-    
-    coord -= center[:2]
-    mu = np.sqrt(Rpix**2 - (coord[0]**2 + coord[1]**2)) / Rpix
-    return mu
-
 def ccd2HPC(file,coords=None):
     """
     from CCD frame to Helioprojective Cartesian
@@ -2163,7 +2399,7 @@ def ccd2HPC(file,coords=None):
     elif type(file) == fits.header.Header:
         hdr = file
     
-    if coords is not None:
+    if coords is not None: # coords must be (N,3), N is the number of pixels, the second axis is (x,y,1)
         if type(coords) == list or type(coords) == tuple:
             coords = np.asarray([coords[0],coords[1],1])
         elif type(coords) == np.ndarray:
@@ -2177,55 +2413,55 @@ def ccd2HPC(file,coords=None):
             coords = coords[np.newaxis]
         
     pxsc = hdr['CDELT1']
-    sun_dist_m=(hdr['DSUN_AU']*u.AU).to(u.m).value #Earth
-    sun_dist_AU=hdr['DSUN_AU'] #Earth
+    sun_dist_m=hdr['DSUN_OBS'] #Earth
     rsun = hdr['RSUN_REF'] # m
-    pxbeg1 = hdr['PXBEG1']
-    pxend1 = hdr['PXEND1']
-    pxbeg2 = hdr['PXBEG2']
-    pxend2 = hdr['PXEND2']
-    
-    dx = 2 * (sun_dist_m-rsun) * np.tan(pxsc/2/3600*np.pi/180) # m/px
-    
-    center = center_coord(hdr)
-    
-    # translation of the reference system from (0,0) to the disk center
-    tr = np.asarray([[1,0,-center[0]],[0,1,-center[1]],[0,0,1]])
-    if coords is None:
-        X,Y = np.meshgrid(np.arange(0,pxend1-pxbeg1+1),np.arange(0,pxend2-pxbeg2+1))
-        tr3 = np.tile(tr, (X.shape[0],X.shape[1],1,1))
-        temp = np.moveaxis(np.moveaxis(np.asarray([[X,Y,np.ones(X.shape)],[X,Y,np.ones(X.shape)],[X,Y,np.ones(X.shape)]]),0,-1),0,-2)
-
-        new_coords = (tr3 @ temp)
-        del temp
+    if 'PXBEG1' in hdr:
+        pxbeg1 = hdr['PXBEG1']
     else:
-        new_coords = tr @ np.moveaxis(coords,0,1)
-    
-    # rotation of the coordinate
-    angle = hdr['CROTA'] # positive angle = clock-wise rotation of the reference system axes 
-    rad = angle * np.pi/180
-    rot = np.asarray([[np.cos(rad),-np.sin(rad),0],[np.sin(rad),np.cos(rad),0],[0,0,1]])
-    rc = [0,0] # center is in (0,0) now
-
-    tr = np.asarray([[1,0,rc[0]],[0,1,rc[1]],[0,0,1]])
-    invtr = np.asarray([[1,0,-rc[0]],[0,1,-rc[1]],[0,0,1]])
-    M = tr @ rot @ invtr
+        pxbeg1 = 1
+    if 'PXBEG2' in hdr:
+        pxbeg2 = hdr['PXBEG2']
+    else:
+        pxbeg2 = 1
+    if 'PXEND1' in hdr:
+        pxend1 = hdr['PXEND1']
+    else:
+        pxend1 = hdr['NAXIS1']
+    if 'PXEND2' in hdr:
+        pxend2 = hdr['PXEND2']
+    else:
+        pxend2 = hdr['NAXIS2']
+    crval1 = hdr['CRVAL1']
+    crval2 = hdr['CRVAL2']
+    crpix1 = hdr['CRPIX1']
+    crpix2 = hdr['CRPIX2']
+    if 'PC1_1' in hdr:
+        PC1_1 = hdr['PC1_1']
+        PC1_2 = hdr['PC1_2']
+        PC2_1 = hdr['PC2_1']
+        PC2_2 = hdr['PC2_2']
+    else:
+        crota = hdr['CROTA*'][0]
+        PC1_1 = np.cos(crota*np.pi/180)
+        PC1_2 = -np.sin(crota*np.pi/180)
+        PC2_1 = np.sin(crota*np.pi/180)
+        PC2_2 = np.cos(crota*np.pi/180)
     
     if coords is None:
-        M3 = np.tile(M, (X.shape[0],X.shape[1],1,1))
-        new_coords = M3 @ new_coords
-        new_coords = np.moveaxis(new_coords[:,:,:2,0],-1,0)
+        X,Y = np.meshgrid(np.arange(1,pxend1-pxbeg1+2),np.arange(1,pxend2-pxbeg2+2))
     else:
-        new_coords = M @ new_coords
+        X = coords[:,0]+1
+        Y = coords[:,1]+1
     
-    new_coords = (new_coords)*pxsc
-    th = np.arctan(np.sqrt(np.cos(new_coords[1]/3600*np.pi/180)**2*np.sin(new_coords[0]/3600*np.pi/180)**2+np.sin(new_coords[1]/3600*np.pi/180)**2/
-                          (np.cos(new_coords[1]/3600*np.pi/180)*np.cos(new_coords[0]/3600*np.pi/180))))
+    HPC1 = crval1 + pxsc*(PC1_1*(X-crpix1)+PC1_2*(Y-crpix2))
+    HPC2 = crval2 + pxsc*(PC2_1*(X-crpix1)+PC2_2*(Y-crpix2))
+
+    th = np.arctan(np.sqrt(np.cos(HPC2/3600*np.pi/180)**2*np.sin(HPC1/3600*np.pi/180)**2+np.sin(HPC2/3600*np.pi/180)**2/
+                          (np.cos(HPC2/3600*np.pi/180)*np.cos(HPC1/3600*np.pi/180))))
     b = np.arcsin(sun_dist_m/rsun*np.sin(th)) - th
-    # g = np.pi - th - b
     d = (sun_dist_m-rsun*np.cos(b))/np.cos(th)
-
-    return new_coords[0],new_coords[1], d
+    
+    return HPC1, HPC2, d
 
 def ccd2HCC(file,coords = None):
     """
@@ -2250,14 +2486,7 @@ def ccd2HCC(file,coords = None):
     elif type(file) == fits.header.Header:
         hdr = file
     
-    pxsc = hdr['CDELT1']
-    sun_dist_m=(hdr['DSUN_AU']*u.AU).to(u.m).value #Earth
-    sun_dist_AU=hdr['DSUN_AU'] #Earth
-    rsun = hdr['RSUN_REF'] # m
-    pxbeg1 = hdr['PXBEG1']
-    pxend1 = hdr['PXEND1']
-    pxbeg2 = hdr['PXBEG2']
-    pxend2 = hdr['PXEND2']
+    sun_dist_m=hdr['DSUN_OBS']
     
     HPCx, HPCy, HPCd = ccd2HPC(file,coords)
     
@@ -2287,16 +2516,15 @@ def ccd2HGS(file, coords = None):
     elif type(file) == fits.header.Header:
         hdr = file
     
-    pxbeg1 = hdr['PXBEG1']
-    pxend1 = hdr['PXEND1']
-    pxbeg2 = hdr['PXBEG2']
-    pxend2 = hdr['PXEND2']
-    pxsc = hdr['CDELT1']
-    B0 = hdr['HGLT_OBS']*np.pi/180
-    PHI0 = hdr['HGLN_OBS']*np.pi/180
-    sun_dist_m=(hdr['DSUN_AU']*u.AU).to(u.m).value #Earth
-    sun_dist_AU=hdr['DSUN_AU'] #Earth
-    rsun = hdr['RSUN_REF'] # m
+    if 'HGLT_OBS' in hdr:
+        B0 = hdr['HGLT_OBS']*np.pi/180
+    else:
+        B0 = hdr['CRLT_OBS']*np.pi/180
+    if 'HGLN_OBS' in hdr:
+        PHI0 = hdr['HGLN_OBS']*np.pi/180
+    else:
+        L0time = datetime.datetime.fromisoformat(hdr['DATE-OBS'])
+        PHI0 = hdr['CRLN_OBS'] - sunpy.coordinates.sun.L0(L0time).value
     
     HCCx, HCCy, HCCz = ccd2HCC(file,coords)
         
@@ -2306,7 +2534,161 @@ def ccd2HGS(file, coords = None):
     
     # THETA == LAT; PHI == LON
     return r, THETA, PHI
-  
+
+def HPC2ccd(file, coords):
+    """
+    from Helioprojective Cartesian to CCD frame
+    
+    Input
+    file: file_name, sunpy map or header
+    coords: Helioprojective Cartesian coordinates (sse output of ccd2HPC)
+            
+    Output
+    x,y (in pixels)
+    
+    """
+    import sunpy.map
+    if type(file) == str:
+        hdr = fits.getheader(file)
+    elif type(file) == sunpy.map.mapbase.GenericMap or type(file) == sunpy.map.sources.sdo.HMIMap:
+        hdr = file.fits_header
+    elif type(file) == fits.header.Header:
+        hdr = file
+            
+    try:
+        HPC1, HPC2 = coords
+    except:
+        HPC1, HPC2, d = coords
+    assert (np.shape(HPC1) == np.shape(HPC2))
+
+    if type(HPC1) == list or type(HPC2) == tuple:
+        HPC1 = np.asarray(HPC1)
+        HPC2 = np.asarray(HPC2)
+        
+    pxsc = hdr['CDELT1']
+    crval1 = hdr['CRVAL1']
+    crval2 = hdr['CRVAL2']
+    crpix1 = hdr['CRPIX1']
+    crpix2 = hdr['CRPIX2']
+    if 'PC1_1' in hdr:
+        PC1_1 = hdr['PC1_1']
+        PC1_2 = hdr['PC1_2']
+        PC2_1 = hdr['PC2_1']
+        PC2_2 = hdr['PC2_2']
+    else:
+        crota = hdr['CROTA*'][0]
+        PC1_1 = np.cos(crota*np.pi/180)
+        PC1_2 = -np.sin(crota*np.pi/180)
+        PC2_1 = np.sin(crota*np.pi/180)
+        PC2_2 = np.cos(crota*np.pi/180)
+    
+    x = crpix1 + 1/pxsc * (PC1_1*(HPC1-crval1) + PC2_1*(HPC2-crval2)) - 1
+    y = crpix2 + 1/pxsc * (PC1_2*(HPC1-crval1) + PC2_2*(HPC2-crval2)) - 1
+        
+    return x,y
+
+def HCC2ccd(file,coords):
+    """
+    from Heliocentric Cartesian to CCD frame
+    
+    Input
+    file: file_name, sunpy map or header
+    coords: Heliocentric Cartesian coordinates (sse output of ccd2HCC)
+            
+    Output
+    x,y (in pixels)
+    
+    """
+    import sunpy.map
+    if type(file) == str:
+#         smap = sunpy.map.Map(file)
+        hdr = fits.getheader(file)
+    elif type(file) == sunpy.map.mapbase.GenericMap or type(file) == sunpy.map.sources.sdo.HMIMap:
+#         smap = file
+        hdr = file.fits_header
+    elif type(file) == fits.header.Header:
+        hdr = file
+    
+    HCCx,HCCy,HCCz = coords
+    assert (np.shape(HCCx) == np.shape(HCCy) and np.shape(HCCx) == np.shape(HCCz))
+
+    if type(HCCx) == list or type(HCCx) == tuple:
+        HCCx = np.asarray(HCCx)
+        HCCy = np.asarray(HCCy)
+        HCCz = np.asarray(HCCz)
+
+    sun_dist_m=hdr['DSUN_OBS']
+    
+    HPCd = np.sqrt(HCCx**2+HCCy**2+(sun_dist_m-HCCz)**2)
+    HPCx = np.arctan(HCCx/(sun_dist_m-HCCz))*180/np.pi*3600
+    HPCy = np.arcsin(HCCy/HPCd)*180/np.pi*3600
+    
+    
+    x,y = HPC2ccd(hdr,(HPCx,HPCy,HPCd))
+    
+    return x,y
+
+def HGS2ccd(file, coords):
+    """
+    from Heliographic Stonyhurst to CCD frame
+    
+    Input
+    file: file_name, sunpy map or header
+    coords: Heliographic Stonyhurst coordinates (sse output of ccd2HGS)
+            
+    Output
+    x,y (in pixels)
+    
+    """
+    
+    import sunpy.map
+    if type(file) == str:
+        hdr = fits.getheader(file)
+    elif type(file) == sunpy.map.mapbase.GenericMap or type(file) == sunpy.map.sources.sdo.HMIMap:
+        hdr = file.fits_header
+    elif type(file) == fits.header.Header:
+        hdr = file
+    
+    r, THETA, PHI = coords
+    assert (np.shape(r) == np.shape(THETA) and np.shape(r) == np.shape(PHI))
+
+    if type(r) == list or type(r) == tuple:
+        r = np.asarray(r)
+        THETA = np.asarray(THETA)
+        PHI = np.asarray(PHI)
+
+    if 'HGLT_OBS' in hdr:
+        B0 = hdr['HGLT_OBS']*np.pi/180
+    else:
+        B0 = hdr['CRLT_OBS']*np.pi/180
+    if 'HGLN_OBS' in hdr:
+        PHI0 = hdr['HGLN_OBS']*np.pi/180
+    else:
+        L0time = datetime.datetime.fromisoformat(hdr['DATE-OBS'])
+        PHI0 = hdr['CRLN_OBS'] - sunpy.coordinates.sun.L0(L0time).value
+    
+    THETA = THETA * np.pi/180
+    PHI = PHI * np.pi/180
+    
+    HCCx = r * np.cos(THETA) * np.sin(PHI-PHI0)
+    HCCy = r * (np.sin(THETA)*np.cos(B0) - np.cos(THETA)*np.cos(PHI-PHI0)*np.sin(B0))
+    HCCz = r * (np.sin(THETA)*np.sin(B0) + np.cos(THETA)*np.cos(PHI-PHI0)*np.cos(B0))
+    
+    
+    x, y = HCC2ccd(hdr,(HCCx,HCCy,HCCz))
+    
+    return x,y
+
+def hmi2phi(hmi_map, phi_map,  order=1):
+    
+    from scipy.ndimage import map_coordinates
+
+    hgsPHI = ccd2HGS(phi_map.fits_header)
+    new_coord = HGS2ccd(hmi_map.fits_header,hgsPHI)
+    hmi_remap = map_coordinates(hmi_map.data,[new_coord[1],new_coord[0]],order=order)
+    
+    return hmi_remap
+
 def phi_disambig(bazi,bamb,method=2):
     """
     input
@@ -2329,7 +2711,7 @@ def phi_disambig(bazi,bamb,method=2):
     
     return disbazi
 
-def dataset_colorbar(ax,im,location="top",label=None):
+def dataset_colorbar(ax,im,location="top",label=None,xy=None,fontsize=9):
     from mpl_toolkits.axes_grid1 import make_axes_locatable
 
     divider = make_axes_locatable(ax)
@@ -2338,13 +2720,14 @@ def dataset_colorbar(ax,im,location="top",label=None):
         orientation = 'horizontal'
     else:
         orientation = 'vertical'
-    
-    cb = plt.colorbar(im, orientation=orientation, cax=cax)
-#     cax.set_title(r'km$^2$/s$^2$/Hz',fontsize=9); #cax.yaxis.set_label_position("right")
-    if label is not None:
-        cax.set_title(label,fontsize=9,x=-.1,y=-1); #cax.yaxis.set_label_position("right")
+    if xy is None:
+        cb = plt.colorbar(im, orientation=orientation, cax=cax, label=label)
+    else:
+        cb = plt.colorbar(im, orientation=orientation, cax=cax)
+        cax.set_title(label,fontsize=fontsize,x=xy[0],y=xy[1])
+        
     if location == 'top' or location == 'bottom':
-        cax.xaxis.set_ticks_position(location)
+        cax.xaxis.set_ticks_position(location)    
     else:
         cax.yaxis.set_ticks_position(location)
     
@@ -2395,10 +2778,17 @@ def show_image_array(arr, hdr, grayscales, row_labels=None,
         mean = im[sly,slx].mean()
 
         ax = axs[i, j]
-        im = axs[i, j].imshow(im, cmap='gray', vmin=mean-grayscales[i], vmax=mean+grayscales[i])
-
+        
         # Print color scale range
-        ax.text(0.05, 0.94, f'{mean:.4f} $\pm$ {grayscales[i]:.3f}', transform=ax.transAxes, color='white')
+        im = axs[i, j].imshow(im, cmap='gray', clim=grayscales[i],interpolation=None)
+        if i == 0:
+            ax.text(0.05, 0.94, f'{grayscales[i][0]:.1f} - {grayscales[i][1]:.1f}', transform=ax.transAxes, color='white')
+        else:
+            ax.text(0.05, 0.94, f'{grayscales[i][0]:.3f} - {grayscales[i][1]:.3f}', transform=ax.transAxes, color='white')
+        # ax.text(0.05, 0.94, f'{grayscales[i][0]:.1f} - {grayscales[i][1]:.1f}', transform=ax.transAxes, color='white')
+        # else:
+        #     im = axs[i, j].imshow(im, cmap='gray', vmin=mean+grayscales[i][0], vmax=mean+grayscales[i][1],interpolation=None)
+        #     ax.text(0.05, 0.94, f'{mean:.4f} $\pm$ {grayscales[i][1]:.3f}', transform=ax.transAxes, color='white')
 
     # Set row labels
     if row_labels is not None:
@@ -2428,6 +2818,7 @@ def plot_l2_pdf(path,did,version=None):
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
     import glob
+    from matplotlib.colors import LinearSegmentedColormap
     # import os
     # import re
     # from argparse import ArgumentParser
@@ -2441,8 +2832,14 @@ def plot_l2_pdf(path,did,version=None):
     # plt.rcParams['figure.dpi'] = 300
     plt.rcParams['xtick.direction'] = 'in'
     plt.rcParams['ytick.direction'] = 'in'
-    import sunpy.visualization.colormaps
+    plt.rcParams['image.cmap'] = 'gist_heat'
+    plt.rcParams['image.interpolation'] = 'none'
+
     import cmasher as cmr
+
+    pipe_dir = os.path.realpath(__file__)
+    pipe_dir = pipe_dir.split('src/')[0]
+    hmimag = LinearSegmentedColormap.from_list('hmimag', np.loadtxt(pipe_dir+'csv/hmimag.csv',delimiter=','), N=256)
 
     file_n = os.listdir(path)
     if type(did) != str:
@@ -2458,14 +2855,27 @@ def plot_l2_pdf(path,did,version=None):
 
     dat = {}
     keys = ['icnt', 'vlos', 'blos', 'binc', 'bmag', 'bazi', 'chi2']
+    missingKeys = []
     for key in keys:
-        datfile = glob.glob(os.path.join(path, f'solo_L2_phi-hrt-{key}_*_{version}_{did}.fits.gz'))[0]
-        dat[key], h = load_fits(datfile)
+        try:
+            datfile = glob.glob(os.path.join(path, f'solo_L2_phi-hrt-{key}_*_{version}_{did}.fits*'))[0]
+            dat[key], h = load_fits(datfile)
+        except:
+            print('Missing '+key)
+            missingKeys += [key]
+    
+    for key in missingKeys:
+        k = next((e for e in keys if e!=key), None)
+        dat[key] = np.zeros(dat[k].shape)
+    
     _, _, _, sly, slx = limb_side_finder(dat['icnt'], h, False)
     
 
-    datfile = glob.glob(os.path.join(path, f'solo_L2_phi-hrt-stokes_*_{version}_{did}.fits.gz'))[0]
+    datfile = glob.glob(os.path.join(path, f'solo_L2_phi-hrt-stokes_*_{version}_{did}.fits*'))[0]
     stk, h = load_fits(datfile)
+    if stk.shape[0] != 6 or stk.shape[1] != 4:
+        stk = np.einsum('yxpl->lpyx',stk)
+    
     wavelengths,_,_,cpos = fits_get_sampling(datfile)
 
     if version == '*':
@@ -2492,7 +2902,7 @@ def plot_l2_pdf(path,did,version=None):
 
     # Continuum intensity
     ax = axs[0, 0]
-    im = ax.imshow(dat['icnt'], cmap='gist_heat', vmin=0.2, vmax=1.2)
+    im = ax.imshow(dat['icnt'], cmap='gist_heat', vmin=0.2, vmax=1.2,interpolation='none')
     dataset_colorbar(ax,im,"right")
     ax.set_title('Continuum intensity')
 
@@ -2500,31 +2910,31 @@ def plot_l2_pdf(path,did,version=None):
     ax = axs[0, 1]
     shape = dat['vlos'].shape
     avg = dat['vlos'][int(shape[0]//4):-int(shape[0]//4),int(shape[1]//4):-int(shape[1]//4)].mean()
-    im = ax.imshow(dat['vlos'], cmap=cmr.fusion.reversed(), vmin=-2+avg, vmax=2+avg)
+    im = ax.imshow(dat['vlos'], cmap=cmr.fusion.reversed(), vmin=-2+avg, vmax=2+avg,interpolation='none')
     dataset_colorbar(ax,im,"right", label='km/s')
     ax.set_title('LoS velocity')
 
     # BLOS
     ax = axs[0, 2]
-    im = ax.imshow(dat['blos'], cmap='hmimag', vmin=-1500, vmax=1500)
+    im = ax.imshow(dat['blos'], cmap=hmimag, vmin=-1500, vmax=1500,interpolation='none')
     dataset_colorbar(ax,im,"right", label='G')
     ax.set_title('LoS magnetic field')
 
     # B inclination
     ax = axs[1, 0]
-    im = ax.imshow(dat['binc'], cmap=cmr.fusion, vmin=0, vmax=180)
+    im = ax.imshow(dat['binc'], cmap=cmr.fusion, vmin=0, vmax=180,interpolation='none')
     dataset_colorbar(ax,im,"right", label='°')
     ax.set_title('Magn. field inclination')
 
     # B
     ax = axs[1, 1]
-    im = ax.imshow(dat['bmag'], cmap='gnuplot_r', vmin=0, vmax=1000)
+    im = ax.imshow(dat['bmag'], cmap='gnuplot_r', vmin=0, vmax=1000,interpolation='none')
     dataset_colorbar(ax,im,"right", label='G')
     ax.set_title('Magn. field strength')
 
     # B azimuth
     ax = axs[1, 2]
-    im = ax.imshow(dat['bazi'], cmap='hsv', vmin=0, vmax=180)
+    im = ax.imshow(dat['bazi'], cmap='hsv', vmin=0, vmax=180,interpolation='none')
     dataset_colorbar(ax,im,"right", label='°')
     ax.set_title('Magn. field azimuth')
 
@@ -2548,7 +2958,7 @@ def plot_l2_pdf(path,did,version=None):
 
     # Chisq
     ax = axs[0,0]
-    im = ax.imshow(dat['chi2'], cmap='turbo', vmin=0, vmax=50)
+    im = ax.imshow(dat['chi2'], cmap='turbo', vmin=0, vmax=100,interpolation='none')
     dataset_colorbar(ax,im,"right")
     ax.set_title('$\chi^2$')
 
@@ -2692,7 +3102,7 @@ def plot_l2_pdf(path,did,version=None):
 
     dat = np.transpose(stk, (1, 0, 2, 3))  # re-arrange Stokes and wavelength axes 
 
-    grayscales = [1] + [0.01] * 3  # I, Q, U, V
+    grayscales = [(.3,1.2)] + [(-3e-3,3e-3)]*3 # [1] + [0.01] * 3  # I, Q, U, V
     row_labels = ['I', 'Q', 'U', 'V']
     column_labels = ['{:.3f} nm'.format(wave) for wave in wavelengths]
     title = os.path.basename(datfile) 

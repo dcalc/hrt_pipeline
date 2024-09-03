@@ -1,11 +1,9 @@
 import numpy as np
 from scipy.ndimage import gaussian_filter
-from operator import itemgetter
 from sophi_hrt_pipe.utils import *
 import os
 import time
 import cv2
-
 
 def setup_header(hdr_arr):
     """Add calibration keywords to header
@@ -20,27 +18,27 @@ def setup_header(hdr_arr):
     hdr_arr
         Updated header array
     """
-    k = ['CAL_FLAT','CAL_USH','SIGM_USH','CAL_TEMP',
+    k = ['CAL_FLAT','CAL_FNUM','CAL_USH','SIGM_USH','CAL_TEMP',
     'CAL_PRE','CAL_GHST','CAL_PREG','CAL_REAL',
     'CAL_CRT0','CAL_CRT1','CAL_CRT2','CAL_CRT3','CAL_CRT4','CAL_CRT5',
     'CAL_CRT6','CAL_CRT7','CAL_CRT8','CAL_CRT9',
-    'CAL_WREG','CAL_NORM','CAL_FRIN','CAL_PSF','CAL_IPOL',
-    'CAL_SCIP','RTE_MOD','RTE_SW','RTE_ITER','VERS_CAL']
+    'CAL_WREG','CAL_NORM','CAL_FRIN','CAL_PSF','CAL_ZER','CAL_IPOL',
+    'CAL_CAVM','CAL_SCIP','RTE_MOD','RTE_SW','RTE_ITER','VERS_CAL']
 
-    v = [0,' ',' ','False',
+    v = [0,24,' ',' ','False',
     ' ','None ','None','NA',
     0,0,0,0,0,0,
     0,0,0,0,
-    'None',' ','NA','NA',' ',
-    'None',' ',' ',4294967295, hdr_arr[0]['VERS_SW'][1:4]]
+    'None',' ','NA','NA','NA',' ',
+    'None','None',' ',' ',4294967295, hdr_arr[0]['VERS_SW'][1:4]]
 
-    c = ['Onboard calibrated for gain table','Unsharp masking correction','Sigma for unsharp masking [px]','Wavelengths correction for FG temperature',
+    c = ['Onboard calibrated for gain table','Unsharp masking correction','Number of flat field frames used','Sigma for unsharp masking [px]','Wavelengths correction for FG temperature',
     'Prefilter correction (DID/file)','Ghost correction (name + version of module)',
          'Polarimetric registration','Prealigment of images before demodulation',
     'cross-talk from I to Q (slope)','cross-talk from I to Q (offset)','cross-talk from I to U (slope)','cross-talk from I to U (offset)','cross-talk from I to V (slope)','cross-talk from I to V (offset)',
     'cross-talk from V to Q (slope)','cross-talk from V to Q (offset)','cross-talk from V to U (slope)','cross-talk from V to U (offset)','Wavelength Registration',
-    'Normalization (normalization constant PROC_Ic)','Fringe correction (name + version of module)','PSF deconvolution','Onboard calibrated for instrumental polarization',
-    'Onboard scientific data analysis','Inversion mode','Inversion software','Number RTE inversion iterations', 'Version of calibration pack']
+    'Normalization (normalization constant PROC_Ic)','Fringe correction (name + version of module)','PSF deconvolution','Zernike coefficients (rad)','Onboard calibrated for instrumental polarizatio',
+    'Cavity map used during inversion','Onboard scientific data analysis','Inversion mode','Inversion software','Number RTE inversion iterations', 'Version of calibration pack']
 
     for h in hdr_arr:
         for i in range(len(k)):
@@ -76,7 +74,7 @@ def data_hdr_kw(hdr, data):
     return hdr
 
 
-def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, header_imgdirx_exists, imgdirx_flipped, cpos_arr) -> np.ndarray:
+def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, header_imgdirx_exists, imgdirx_flipped, cpos_arr,pmp_temp) -> np.ndarray:
     """Load, properly scale, flip in X if needed, and make any necessary corrections for particular flat fields
 
     Parameters
@@ -141,9 +139,17 @@ def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, hea
 
     flat = compare_cpos(flat,cpos_f,cpos_arr[0]) 
 
-    flat_pmp_temp = str(header_flat['HPMPTSP1'])
+    flat_pmp_temp = str(int(header_flat['HPMPTSP1']))
 
     print(f"Flat PMP Temperature Set Point: {flat_pmp_temp}")
+
+    if flat_pmp_temp != pmp_temp:
+        printc('-->>>>>>> WARNING: Flat and dataset have different PMP temperatures',color=bcolors.WARNING)
+        printc('                   Flat will be demodulated and then modulated back to the dataset PMP temperature',color=bcolors.WARNING)
+        
+        flat, _ = demod_hrt(flat,flat_pmp_temp)
+        flat, _ = demod_hrt(flat,pmp_temp,modulate=True)
+        flat_pmp_temp = pmp_temp
 
     #--------
     # correct for missing line in particular flat field
@@ -287,7 +293,7 @@ def normalise_flat(flat, ceny, cenx) -> np.ndarray:
         printc("ERROR, Unable to normalise the flat field", color=bcolors.FAIL)
 
 
-def demod_hrt(data, pmp_temp, verbose = True) -> np.ndarray:
+def demod_hrt(data, pmp_temp, verbose = True, modulate = False) -> np.ndarray:
     """Use constant demodulation matrices to demodulate input data
 
     Parameters
@@ -350,22 +356,28 @@ def demod_hrt(data, pmp_temp, verbose = True) -> np.ndarray:
     if verbose:
         printc(f'Using a constant demodulation matrix for a PMP TEMP of {pmp_temp} deg, rotated by {HRT_MOD_ROTATION_ANGLE} deg',color = bcolors.OKGREEN)
     
-    demod_data = demod_data.reshape((4,4))
-    shape = data.shape
-    demod = np.tile(demod_data, (shape[0],shape[1],1,1))
+    if modulate:
+        demod_data = mod_matrix
+
+    
+    # demod_data = demod_data.reshape((4,4))
+    # shape = data.shape
+    # demod = np.tile(demod_data, (shape[0],shape[1],1,1))
 
     if data.ndim == 5:
-        # if data array has more than one scan
-        data = np.moveaxis(data,-1,0) #moving number of scans to first dimension
+        data = np.einsum('ij,abjcs->abics', demod_data, data)
+        # # if data array has more than one scan
+        # data = np.moveaxis(data,-1,0) #moving number of scans to first dimension
 
-        data = np.matmul(demod,data)
-        data = np.moveaxis(data,0,-1) #move scans back to the end
+        # data = np.matmul(demod,data)
+        # data = np.moveaxis(data,0,-1) #move scans back to the end
     
     elif data.ndim == 4:
-        # if data has one scan
-        data = np.matmul(demod,data)
+        data = np.einsum('ij,abjc->abic', demod_data, data)
+        # # if data has one scan
+        # data = np.matmul(demod,data)
     
-    return data, demod
+    return data, demod_data
 
 
 def unsharp_masking(flat,sigma,flat_pmp_temp,cpos_arr,clean_mode,clean_f,pol_end=4,verbose=True):
@@ -382,7 +394,7 @@ def unsharp_masking(flat,sigma,flat_pmp_temp,cpos_arr,clean_mode,clean_f,pol_end
     cpos_arr: ndarray
         array of continuum positions
     clean_mode: str
-        options are 'QUV', 'UV', 'V'
+        options are any combination of 'IQUV'
     clean_f: str
         options are 'blurring' or 'fft'
     pol_end: int
@@ -409,20 +421,24 @@ def unsharp_masking(flat,sigma,flat_pmp_temp,cpos_arr,clean_mode,clean_f,pol_end
     elif cpos_arr[0] == 5:
         wv_range = range(5)
 
-    if clean_mode == "QUV":
-        start_clean_pol = 1
-        if verbose:
-            print("Unsharp Masking Q,U,V")
-        
-    elif clean_mode == "UV":
-        start_clean_pol = 2
-        if verbose:
-            print("Unsharp Masking U,V")
-        
-    elif clean_mode == "V":
-        start_clean_pol = 3
-        if verbose:
-            print("Unsharp Masking V")
+    clean_pol = []
+    if "I" in clean_mode:
+        clean_pol += [0]
+    if "Q" in clean_mode:
+        clean_pol += [1]
+    if "U" in clean_mode:
+        clean_pol += [2]
+    if "V" in clean_mode:
+        clean_pol += [3]
+    
+    # add possibility to blur continuum
+    if "cont" in clean_mode:
+        wv_range = range(6)
+        if "only" in clean_mode:
+            wv_range = [cpos_arr[0]]
+    
+    print("Unsharp Masking",clean_mode, wv_range)
+
         
     if clean_f == 'blurring':
         blur = lambda a: gaussian_filter(a,sigma)
@@ -431,7 +447,7 @@ def unsharp_masking(flat,sigma,flat_pmp_temp,cpos_arr,clean_mode,clean_f,pol_end
         fftgaus2d = np.exp(-2*np.pi**2*(x-0)**2*sigma**2)[:,np.newaxis] * np.exp(-2*np.pi**2*(x-0)**2*sigma**2)[np.newaxis]
         blur = lambda a : (np.fft.ifftn(fftgaus2d*np.fft.fftn(a.copy()))).real
     
-    for pol in range(start_clean_pol,pol_end):
+    for pol in clean_pol:
 
         for wv in wv_range: #not the continuum
 
@@ -441,10 +457,8 @@ def unsharp_masking(flat,sigma,flat_pmp_temp,cpos_arr,clean_mode,clean_f,pol_end
 
             new_demod_flats[:,:,pol,wv] = c
 
-    invM = np.linalg.inv(demodM)
-
-    flat_cleaned = np.matmul(invM, new_demod_flats*norm_factor)
-
+    flat_cleaned, _ = demod_hrt(new_demod_flats*norm_factor,flat_pmp_temp,verbose,modulate=True)
+    
     return flat_cleaned
 
 
@@ -533,7 +547,53 @@ def flat_correction(data,flat,flat_states,cpos_arr,flat_pmp_temp=50,rows=slice(0
         printc("ERROR, Unable to apply flat fields",color=bcolors.FAIL)
 
 
-def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None, TemperatureCorrection=False):
+def prefilter_correctionNew(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_flipped = 'YES'):
+    """
+    New prefilter correction based on JH email on 2023-08-17
+    Based on on-ground measurements at Meudon
+
+    Parameters
+    ----------
+    data: ndarray
+        input data
+    wave_axis_arr: ndarray
+        array containing wavelengths
+    rows: slice
+        rows to be considered because of data cropping
+    cols: slice
+        columns to be considered because of data cropping
+    imgdirx_flipped: str
+        check if data have been flipped (all the hrt-L1 data are flipped), DEFAULT = 'YES'
+
+    Returns
+    -------
+    data: ndarray
+        prefilter corrected data
+    """
+    X,Y = np.meshgrid(np.arange(cols.start,cols.stop),np.arange(rows.start,rows.stop))
+    r = np.sqrt((X-934)**2 + (Y-1148)**2)
+
+    CWL = -0.332253 - 4.81875e-05*r - 3.24533e-07*r**2 #  in AA, 0 is the line core of the Fe617 line (6173.343 AA)
+    FWHM = 2.59385 - 1.28984e-06*r - 7.38763e-09*r**2 # in AA
+    EXP = 3.65789 - 5.76046e-05*r - 3.52776e-08*r**2
+
+    xx = lambda wl: np.abs((wl[:,np.newaxis,np.newaxis]-CWL)*2/FWHM)  # in AA, lambda=0 is the Fe line core
+    profile = lambda wl:  1/(1+xx(wl)**(2*EXP)) # max. transmission set to be 1. everywhere
+
+    wlref = 6173.341
+
+    for scan in range(data.shape[-1]):
+        # prefilter = profile(wave_axis_arr[scan]-wlref) # [wl,y,x]
+        # DC 20240612
+        prefilter = profile(wave_axis_arr[scan]-wlref-(Tetalon-66)*34.25e-3) # [wl,y,x] # Temperature shift of the prefilter by TO
+        prefilter = np.moveaxis(prefilter[...,np.newaxis],0,-1) # [y,x,1,wl]
+        if imgdirx_flipped == 'YES':
+            printc('Flipping prefilter on the Y axis')
+            prefilter = prefilter[:,::-1]
+        data[...,scan] /= prefilter
+    return data
+
+def prefilter_correction(data,wave_axis_arr,prefilter,Tetalon=0,prefilter_voltages = None, TemperatureCorrection=True, TemperatureConstant = 40.323e-3, shift = None):
     """Apply prefilter correction to input data
 
     Parameters
@@ -546,8 +606,10 @@ def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None,
         prefilter data
     prefilter_voltages: ndarray
         prefilter voltages, DEFAULT = None - uses latest prefilter voltages from on ground calibration
-    temperatureCorrection: bool
+    TemperatureCorrection: bool
         apply temperature correction to prefilter data, DEFAULT = False
+    TemperatureConstant: float
+        value of the temperature tuning constant to be used when TemperatureConstant is True, DEFAULT = 36.46e-3 mA/K
 
     Returns
     -------
@@ -579,13 +641,16 @@ def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None,
                                         1451.875,  1516.875,  1582.125,  1647.75 ,  1713.875,  1778.375,
                                         1844.   ])
     if TemperatureCorrection:
-        temperature_constant_old = 40.323e-3 # old temperature constant, still used by Johann
-        temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
+        # temperature_constant_old = 40.323e-3 # old temperature constant, still used by Johann
+        # temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
+        # temperature_constant_new = 36.46e-3 # value from HS
         Tfg = 66 # FG was at 66 deg during e2e calibration
         tunning_constant = 0.0003513 # this shouldn't change
         
         ref_wavelength = 6173.341 # this shouldn't change
-        prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength + temperature_constant_new*(Tfg-61) - 0.002 # JH ref
+        prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength + TemperatureConstant*(Tfg-61) - 0.002 # JH ref
+        # DC 20240612
+        prefilter_wave += (Tetalon-66)*34.25e-3 # Temperature shift of the prefilter by TO
         
         # ref_wavelength = round(6173.072 - (-1300*tunning_constant),3) # 6173.529. 0 level was different during e2e test
         # prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength # + temperature_constant_new*(Tfg-61)
@@ -601,39 +666,44 @@ def prefilter_correction(data,wave_axis_arr,prefilter,prefilter_voltages = None,
 
         wave_list = wave_axis_arr[scan]
         
-        for wv in range(6):
+        if shift is None:
+            for wv in range(len(wave_list)):
 
-            v = wave_list[wv]
+                v = wave_list[wv]
 
-            vdif = [v - pf for pf in prefilter_wave]
-            
-            v1, index1 = _get_v1_index1(vdif)
-            if v < prefilter_wave[-1] and v > prefilter_wave[0]:
-                
-                if vdif[index1] >= 0:
-                    v2 = vdif[index1 + 1]
-                    index2 = index1 + 1
+                vdif = [v - pf for pf in prefilter_wave]
 
-                else:
-                    v2 = vdif[index1-1]
+                v1, index1 = _get_v1_index1(vdif)
+                if v < prefilter_wave[-1] and v > prefilter_wave[0]:
+
+                    if vdif[index1] >= 0:
+                        v2 = vdif[index1 + 1]
+                        index2 = index1 + 1
+
+                    else:
+                        v2 = vdif[index1-1]
+                        index2 = index1 - 1
+
+                    # imprefilter = (prefilter[:,:, index1]*(0-v1) + prefilter[:,:, index2]*(v2-0))/(v2-v1) #interpolation between nearest voltages
+
+                elif v >= prefilter_wave[-1]:
                     index2 = index1 - 1
-                    
-                # imprefilter = (prefilter[:,:, index1]*(0-v1) + prefilter[:,:, index2]*(v2-0))/(v2-v1) #interpolation between nearest voltages
+                    v2 = vdif[index2]
 
-            elif v >= prefilter_wave[-1]:
-                index2 = index1 - 1
-                v2 = vdif[index2]
-                
-            elif v <= prefilter_wave[0]:
-                index2 = index1 + 1
-                v2 = vdif[index2]
-                
-            imprefilter = (prefilter[:,:, index1]*v2 + prefilter[:,:, index2]*(-v1))/(v2-v1) #interpolation between nearest voltages
-                
-            # imprefilter = (prefilter[:,:, index1]*v1 + prefilter[:,:, index2]*v2)/(v1+v2) #interpolation between nearest voltages
+                elif v <= prefilter_wave[0]:
+                    index2 = index1 + 1
+                    v2 = vdif[index2]
 
-            data[:,:,:,wv,scan] /= imprefilter[...,np.newaxis]
-            
+                imprefilter = (prefilter[:,:, index1]*v2 + prefilter[:,:, index2]*(-v1))/(v2-v1) #interpolation between nearest voltages
+
+                # imprefilter = (prefilter[:,:, index1]*v1 + prefilter[:,:, index2]*v2)/(v1+v2) #interpolation between nearest voltages
+
+                data[:,:,:,wv,scan] /= imprefilter[...,np.newaxis]
+        else:
+            for i in range(data.shape[0]):
+                for j in range(data.shape[1]):
+                    data[i,j,:,:,scan] /= np.interp(wave_list - shift[i,j],prefilter_wave,prefilter[i,j])
+  
     return data
 
 def apply_field_stop(data, rows, cols, header_imgdirx_exists, imgdirx_flipped) -> np.ndarray:
@@ -720,6 +790,508 @@ def load_ghost_field_stop(header_imgdirx_exists, imgdirx_flipped) -> np.ndarray:
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
     return field_stop_ghost
 
+
+def crosstalk_2D_ItoQUV(data: np.ndarray,
+                     verbose: bool = False,
+                     mask: np.ndarray = np.empty([], dtype=float),
+                     threshold: float = 0.5,
+                     lower_threshold: float = 40.0,
+                     norma: float = 1.0,
+                     mode: str = 'standard',
+                     divisions: int = 16,
+                     ind_wave: bool = False,
+                     continuum_pos: int = 0,
+                     VtoQU: bool = False):
+    """
+    crosstalk_ItoQUV calculates the cross-talk from Stokes $I$ to Stokes $Q$, $U$, and $V$.
+
+    The procedure works as follow: (see Sanchez Almeida, J. \& Lites, B.~W.\ 1992, \apj, 398, 359. doi:10.1086/171861)
+
+
+    :param input_data: input data. Dimensions should be `[Stokes, wavelength, ydim,xdim]`
+    :type input_data: np.ndarray
+    :param verbose: activate verbosity, defaults to False
+    :type verbose: bool, optional
+    :param mask: mask for selecting the image area for cross-talk correction dimension = `[ydim,xdim]´, defaults to 0
+    :type mask: np.ndarray, optional
+    :param threshold: threshold for considering signals in the cross-talk calculation. :math:`p = \sqrt(Q^2 + U^2 = V^2) < threshold`. Given in percent, defaults to 0.5 %
+    :type threshold: float, optional
+    :param lower_threshold: lower threshold for considering signals in the cross-talk calculation. :math:`I(\\lambda) > lower_threshold`. Given in percent, defaults to 40 %
+    :type lower_threshold: float, optional
+    :param norma: Data normalization value, defaults to 1.0
+    :type norma: float, optional
+    :param mode: crosstalk mode, defaults to 'standard'
+
+        there are two different modes for calculating the cross-talk.
+
+        1. ´mode = 'standard'´. It is done using the whole Sun, i.e., one cross-talk coefficient for the full image
+        2. ´mode = 'surface'´. In this case, the Sun is divided in different squares (`N = divisions`) along the two dimensions and the crosstalk is calculated for each of the squares.
+           Then, a surface is fit to the :math:`N**2` coefficients and applied to the data. In this case, lower_trheshold is ignored and if a mask is not privided, the code generated a mask coinciding with the solar disk.
+        2. ´mode = 'jaeggli'´. In this case, the cross talk correction follows the work by Jaeggli et al., 2022, \apj, https://doi.org/10.3847/1538-4357/ac6506
+            The goal is to determine the diattenuator and retarder Mueller matrices that minimize certain criteria based on physical assumptions about the polarized signals from the Sun. The application of the combination of this matrices gives the recovered Stokes vector.
+
+    :type mode: str, optional
+    :param divisions: number of square divisions alon gone axis for `surface`mode. defaults to 6.0
+    :type divisions: int, optional
+    :param cntr_rad: Center and radius of the solar disk `[cx,cy,rad]`. Needed for `mode='surface'`. defaults to []
+    :type cntr_rad: list, optional
+    :param ind_wave: Use just the continuum wavelength for the crosstalk or the whole line. defaults to False
+    :type ind_wave: bool, optional
+    :param continuum_pos: If ind_wave, this keyword is mandatory and contains the position of the continuum. defaults to 0.
+    :type continuum_pos: int, optional
+    :param VtoQU: If True, it applies the retarder matrix when 'jaeggli' method is performed. defaults to False
+    :type VtoQU: bool, optional
+    :return: cross-talk parameters
+    :rtype: List of np.ndarray
+    """
+
+    from scipy.optimize import minimize
+
+    def __fit_crosstalk(input,masked,axis = 2,full_verbose = False):
+        # multiply the data by the mask and flatten everything. Flatenning makes things easier
+        xI = (input.take(0,axis=axis) * masked).flatten() #Stokes I
+        yQ = (input.take(1,axis=axis) * masked).flatten() #Stokes Q
+        yU = (input.take(2,axis=axis) * masked).flatten() #Stokes U
+        yV = (input.take(3,axis=axis) * masked).flatten() #Stokes V
+        
+        # check two conditions:
+        # 1) mask should be > 0 and intensity above lower_threshold
+
+        if mask_set:
+            idx = (xI != 0)
+        else:
+            idx = (xI != 0) & (xI > (lower_threshold/100. * norma))
+
+        xI = xI[idx]
+        yQ = yQ[idx]
+        yU = yU[idx]
+        yV = yV[idx]
+        
+        # 2) Stokes Q,U, and V has to be below a limit (for not inclusing polarization signals)
+
+        yP = np.sqrt(yQ**2 + yU**2 + yV**2)
+        idx = yP < (threshold/100. * norma)
+        # plt.figure(); plt.hist(yP,100); plt.axvline((threshold/100. * norma),color='r'); plt.show()
+        xI = xI[idx]
+        yQ = yQ[idx]
+        yU = yU[idx]
+        yV = yV[idx]
+        
+        # Now we perform a cross-talk fit.
+
+        cQ = np.polyfit(xI, yQ, 1)
+        cU = np.polyfit(xI, yU, 1)
+        cV = np.polyfit(xI, yV, 1)
+
+        if full_verbose:
+            st = 0
+            w = 5
+            plt.figure(layout='tight')
+            plt.imshow(masked)
+            plt.show()
+            plt.imshow(input[w,st,:,:])
+            plt.show()
+
+            xp = np.linspace(xI.min(), xI.max(), 100)
+            ynew = np.polyval(cQ, xp)
+            plt.plot(xI,yQ,'.')
+            plt.plot(xp,ynew,'o')
+            plt.show()
+            ynew = np.polyval(cU, xp)
+            plt.plot(xI,yU,'.')
+            plt.plot(xp,ynew,'o')
+            plt.show()
+            ynew = np.polyval(cV, xp)
+            plt.plot(xI,yV,'.')
+            plt.plot(xp,ynew,'o')
+            plt.show()
+
+        return cQ, cU, cV
+
+    def __generate_squares(radius,divisions: int = 6):
+        square_centers = np.linspace(-radius,radius,divisions+1,endpoint=True)[1:] - radius / divisions
+        X,Y = np.meshgrid(square_centers, square_centers)
+        return np.vstack([X.ravel(), Y.ravel()])
+
+    def __fit_plane(data, mask=None):
+
+        """
+        Fit 2D plane to data. Will be replazed by a global one (comming from had-hoc branch) at some point.
+        """
+        yd, xd = data.shape
+        x = np.arange(xd)
+        y = np.arange(yd)
+        X, Y = np.meshgrid(x, y)
+        
+        if mask is not None:
+            X_masked = X[mask]
+            Y_masked = Y[mask]
+            Z_masked = data[mask]
+        else:
+            X_masked = X
+            Y_masked = Y
+            Z_masked = data
+
+        A = np.vstack([X_masked.flatten(), Y_masked.flatten(), np.full(X_masked.size,1)]).T
+        a, b, c = np.linalg.lstsq(A, Z_masked.flatten(), rcond=None)[0]
+        P = a * X + b * Y + c
+
+        return (P, a, b, c)
+
+
+    if data.ndim == 3:
+        # no wavelength has been provided
+        data = data[...,np.newaxis]
+
+    if data.ndim != 4:
+        printc('Input data shall have 3 or 4 dimensions but it is of ',data.ndim,' dimensions',color=bcolors.FAIL)
+        ValueError("Check dimensions of input data into crosstalk_ItoQUV")
+
+    yd,xd,sd,wd = data.shape
+
+    wave_index = np.arange(wd,dtype=int)
+    printc('                     wave_range:',wave_index, color=bcolors.OKBLUE )
+
+    if ind_wave:
+        wave_index[:] = continuum_pos
+        printc('          Computing the cross-talk using just the continuum....', color=bcolors.OKBLUE)
+        printc('                     wave_range has change to:',wave_index, color=bcolors.OKBLUE )
+
+    # First check also if mask has been provided. If np.array in empty with dim (), shape is False.
+    if mask.shape:
+        printc('mask inside `crosstalk_ItoQUV`, has been provided',color=bcolors.OKGREEN)
+        if mask.ndim != 2:
+            printc('Input mask shall have 2 dimensions but it is of ',mask.ndim,' dimensions',color=bcolors.FAIL)
+            ValueError("Check dimensions of input mask into crosstalk_ItoQUV")
+        mask_set = True
+    else:
+        mask = np.zeros((yd,xd),dtype=bool)
+        mask[int(yd//2-yd//4):int(yd//2+yd//4),int(xd//2-xd//4):int(xd//2+xd//4)]
+
+    # threshold = 0.5
+    # lower_threshold = 40.
+    # norma = 1.
+
+    if mode == 'standard':
+
+        cQ, cU, cV = __fit_crosstalk(data[:,:,:,wave_index],mask[...,np.newaxis],full_verbose=verbose)
+
+        print('Cross-talk from I to Q: slope = {: {width}.{prec}f} ; off-set = {: {width}.{prec}f} '.format(cQ[0], cQ[1],width=8,prec=4))
+        print('Cross-talk from I to U: slope = {: {width}.{prec}f} ; off-set = {: {width}.{prec}f} '.format(cU[0], cU[1],width=8,prec=4))
+        print('Cross-talk from I to V: slope = {: {width}.{prec}f} ; off-set = {: {width}.{prec}f} '.format(cV[0], cV[1],width=8,prec=4))
+
+        # corrects the data:
+        corrected_data = np.copy(data)
+        
+        corrected_data[:, :, 1] = data[:, :, 1] - cU[0] * data[:, :, 0] - cU[1]
+        corrected_data[:, :, 2] = data[:, :, 2] - cQ[0] * data[:, :, 0] - cQ[1]
+        corrected_data[:, :, 3] = data[:, :, 3] - cV[0] * data[:, :, 0] - cV[1]
+        
+        return cQ, cU, cV, 0 , 0 , 0, corrected_data
+
+    elif mode == 'surface':
+        sz = data.shape # y,x,p,l
+        rad = sz[0]//2
+        size2 = rad//divisions
+        area = (size2*2)**2
+        ndiv = __generate_squares(rad,divisions)
+        cx = rad; cy = rad
+
+        if verbose:
+            fig, ax = plt.subplots(figsize=(8,8))
+            ax.imshow(data[:,:,0,0],cmap='gray_r')
+
+            for i in range(divisions**2):
+                square = plt.Rectangle((ndiv[0,i] + cx - size2,ndiv[1,i] + cy - size2), size2 * 2, size2 * 2 , color='r', fill=False)
+                ax.add_patch(square)
+            plt.show()
+
+        cQ = np.zeros((2,divisions**2))
+        cU = np.zeros((2,divisions**2))
+        cV = np.zeros((2,divisions**2))
+        
+        for i,loop in enumerate(range(divisions**2)):
+            from_x, to_x = np.round(ndiv[0,i] + cx - size2).astype(int) , np.round(ndiv[0,i] + cx + size2).astype(int)
+            from_y, to_y = np.round(ndiv[1,i] + cy - size2).astype(int) , np.round(ndiv[1,i] + cy + size2).astype(int)
+            if np.sum(mask[from_y:to_y,from_x:to_x])  > area * 0.1:
+                cQ[:,loop], cU[:,loop], cV[:,loop]  = \
+                    __fit_crosstalk(data[from_y:to_y,from_x:to_x,:,wave_index],mask[from_y:to_y,from_x:to_x,np.newaxis],full_verbose=verbose)
+        cQQ = np.reshape(cQ,(2,divisions,divisions))
+        cUU = np.reshape(cU,(2,divisions,divisions))
+        cVV = np.reshape(cV,(2,divisions,divisions))
+
+        if verbose:
+            plt.figure()
+            plt.imshow(cQQ[0,:,:]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(cUU[0,:,:]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(cVV[0,:,:]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(cQQ[1,:,:]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(cUU[1,:,:]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(cVV[1,:,:]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+        
+        dummy_s = np.zeros((yd,xd))
+        dummy_c = np.zeros((yd,xd))
+        for i,loop in enumerate(range(divisions**2)):
+            dummy_s[np.round(ndiv[1,i] + cy).astype(int),np.round(ndiv[0,i] + cx).astype(int)] = cQ[0,loop]
+            dummy_c[np.round(ndiv[1,i] + cy).astype(int),np.round(ndiv[0,i] + cx).astype(int)] = cQ[1,loop]
+        sfitQ = (__fit_plane(dummy_s, mask = (dummy_s != 0)) , __fit_plane(dummy_c, mask = (dummy_c != 0)) )
+        if verbose:
+            plt.figure()
+            plt.imshow(sfitQ[0][0]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(sfitQ[1][0]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+        
+        for i,loop in enumerate(range(divisions**2)):
+            dummy_s[np.round(ndiv[1,i] + cy).astype(int),np.round(ndiv[0,i] + cx).astype(int)] = cU[0,loop]
+            dummy_c[np.round(ndiv[1,i] + cy).astype(int),np.round(ndiv[0,i] + cx).astype(int)] = cU[1,loop]
+        sfitU = (__fit_plane(dummy_s, mask = (dummy_s != 0)) , __fit_plane(dummy_c, mask = (dummy_c != 0)) )
+        if verbose:
+            plt.figure()
+            plt.imshow(sfitU[0][0]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(sfitU[1][0]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+        
+        for i,loop in enumerate(range(divisions**2)):
+            dummy_s[np.round(ndiv[1,i] + cy).astype(int),np.round(ndiv[0,i] + cx).astype(int)] = cV[0,loop]
+            dummy_c[np.round(ndiv[1,i] + cy).astype(int),np.round(ndiv[0,i] + cx).astype(int)] = cV[1,loop]
+        sfitV = (__fit_plane(dummy_s, mask = (dummy_s != 0)) , __fit_plane(dummy_c, mask = (dummy_c != 0)) )
+        if verbose:
+            plt.figure()
+            plt.imshow(sfitV[0][0]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+            plt.figure()
+            plt.imshow(sfitV[1][0]*100,clim=[-0.5,0.5])
+            plt.colorbar()
+            plt.show()
+        
+        # correction
+        corrected_data = np.copy(data)
+        corrected_data[:, :, 1] = data[:, :, 1] - sfitQ[0][0][...,np.newaxis] * data[:, :, 0] - sfitQ[1][0][...,np.newaxis]
+        corrected_data[:, :, 2] = data[:, :, 2] - sfitU[0][0][...,np.newaxis] * data[:, :, 0] - sfitU[1][0][...,np.newaxis]
+        corrected_data[:, :, 3] = data[:, :, 3] - sfitV[0][0][...,np.newaxis] * data[:, :, 0] - sfitV[1][0][...,np.newaxis]
+
+        return cQ, cU, cV, sfitQ, sfitU, sfitV, corrected_data
+    
+    elif mode == 'jaeggli':
+        def _polmodel1(D,theta,chi):
+            dH = D*np.cos(chi)*np.sin(theta)
+            d45 = D*np.sin(chi)*np.sin(theta)
+            dR = D*np.cos(theta)
+            A = np.sqrt(1. - dH**2 - d45**2 - dR**2)
+
+            mat1 = np.array([
+                [ 1., dH, d45, dR], 
+                [ dH,  A,  0., 0.], 
+                [d45, 0.,   A, 0.],
+                [ dR, 0.,  0.,  A]], dtype='double')
+
+            mat2 = np.array([
+                [0.,     0.,     0.,     0.],
+                [0.,  dH**2, d45*dH,  dH*dR],
+                [0., d45*dH, d45**2, d45*dR],
+                [0.,  dH*dR, d45*dR,  dR**2]], dtype='double')
+
+            return( mat1 + (1-A)/D**2*mat2 )
+
+        def _fitfunc1(param, stokesin):
+            D = param[0]
+            theta = param[1]
+            chi = param[2]
+
+            # Keep diattenuation value in range
+            if D>=1:
+                D=0.999999
+
+            if D<=-1:
+                D = -0.999999
+
+            MM = _polmodel1(D, theta, chi)
+            iMM = np.linalg.inv(MM)
+
+            out = _minimize_for_model1(iMM,stokesin)
+
+            return(out)
+
+        def _minimize_for_model1(iMM,bs):
+            # apply a mueller matrix (rotation) to a 2D stokes vector (slit_Y,wavelength_X,4)
+            new_stokes = np.einsum('ij,abj->abi',iMM, np.squeeze(bs))
+
+            # Minimization criteria
+            out = np.abs(np.sum(new_stokes[:,:,0]*new_stokes[:,:,3],axis=1)) + \
+                np.abs(np.sum(new_stokes[:,:,0]*new_stokes[:,:,2],axis=1)) + \
+                np.abs(np.sum(new_stokes[:,:,0]*new_stokes[:,:,1],axis=1))
+
+            # sum over spatial positions
+            out = np.sum(out)
+
+            return(out)
+
+
+        # Functions for the retarder modeling
+        def _polmodel2(theta, delta):
+            St = np.sin(theta)
+            Ct = np.cos(theta)
+            Sd = np.sin(delta)
+            Cd = np.cos(delta)
+
+            MM1 = np.array([
+                [1.,  0., 0., 0.],
+                [0.,  Ct, St, 0.],
+                [0., -St, Ct, 0.],
+                [0.,  0., 0., 1.]
+            ], dtype='double')
+
+            MM2 = np.array([
+                [1., 0.,  0., 0.],
+                [0., 1.,  0., 0.],
+                [0., 0.,  Cd, Sd],
+                [0., 0., -Sd, Cd]
+            ], dtype='double')
+
+            MM = np.einsum('ij,jk', MM1, MM2)
+            return(MM)
+
+        def _fitfunc2(fitangles, stokesin):
+            theta = fitangles[0]
+            delta = fitangles[1]
+
+            MM = _polmodel2(theta, delta)
+            iMM = np.linalg.inv(MM)
+
+            out = _minimize_for_model2(iMM, stokesin)
+
+            return(out)
+
+        def _minimize_for_model2(iMM,bs):
+            new_stokes = np.einsum('ij,abj->abi',iMM, np.squeeze(bs))
+
+            # Minimization criteria
+            out = np.sum(new_stokes[:,:,3],axis=1)**2 +\
+                np.abs(np.sum(new_stokes[:,:,3]*new_stokes[:,:,2],axis=1)) +\
+                np.abs(np.sum(new_stokes[:,:,3]*new_stokes[:,:,1],axis=1))
+
+            # sum over spatial positions
+            out = np.sum(out)
+
+            return(out)
+
+        
+        # Make the continuum intensity map
+        imap = data[:,:,0,continuum_pos]
+        imap = imap.transpose()
+        
+        line_wv = [i for i in range(wd)]
+        line_wv.remove(continuum_pos)
+        
+        # Make the polarization fraction map
+        pmap = np.max( np.sqrt(np.sum(data[:,:,1:,line_wv]**2, axis=2))/np.mean(data[mask>0,0],axis=0)[line_wv], axis=2)
+        pmap = pmap.transpose()
+
+        # Apply thresholds to define different regions
+        ithresh = (lower_threshold/100. * norma) # 0.5 # continuum intensity threshold for the sunspot umbra
+        pthreshlow = (threshold/100. * norma) # polarization threshold for weak/strong polarization regions 
+        pthreshhigh = (threshold/100. * norma * 4) # polarization threshold for weak/strong polarization regions 
+
+        isumbra = np.argwhere(np.logical_and(imap < ithresh, mask > 0))
+        uyidx = isumbra[:,0]
+        uxidx = isumbra[:,1]
+
+        ispolar = np.argwhere(np.logical_and(pmap > pthreshhigh, mask > 0))
+        pyidx = ispolar[:,0]
+        pxidx = ispolar[:,1]
+
+        notpolar = np.argwhere(np.logical_and(pmap < pthreshlow, mask > 0))
+        nyidx = notpolar[:,0]
+        nxidx = notpolar[:,1]
+        
+        # Choose initial guess parameters for the diattenuation minimization
+        D = 0.5
+        theta = 0.
+        chi = 0.
+        initial_guess = (D, theta, chi)
+
+        # Use just the region with weak polarization
+        baddata = np.moveaxis(data[nxidx,nyidx,:][:,:,wave_index],1,2) #do selection for only strong polarization signals
+        result = minimize(_fitfunc1, initial_guess, args=baddata)
+
+        # Apply correction for I<->QUV cross-talk
+        printc('Fitting Diattenuation Matrix',color=bcolors.OKGREEN)
+        MM1a = _polmodel1(result.x[0],result.x[1], result.x[2])
+        iMM1a = np.linalg.inv(MM1a)
+        data1a =  np.einsum('ij,abjc->abic', iMM1a, data)
+
+        # Destreaking correction to data might happen here
+
+        # Choose an initial guess of those cross-talk parameters for the minimization algorithm
+        theta = 0.*np.pi/180.
+        delta = 0.*np.pi/180.
+        initial_guess = (theta,delta)
+
+        # Find the elliptical retardance parameters that minimize V*Q, V*U, and V*V
+        if VtoQU:
+            printc('Fitting Retardance Matrix',color=bcolors.OKGREEN)
+            baddata = np.moveaxis(data1a[pxidx, pyidx,:][:,:,wave_index],1,2)
+            result = minimize(_fitfunc2, initial_guess, args=baddata)
+
+            # Apply correction for QU<->V cross-talk
+            MM2a = _polmodel2(result.x[0],result.x[1])
+            iMM2a = np.linalg.inv(MM2a)
+            data2a =  np.einsum('ij,abjc->abic', iMM2a, data1a)
+            
+            # rotate back the Stokes Q and U signals (TBD)
+            # Apply final sign correction to match original spectra
+            theta = result.x[0]
+            MM3a = np.array( [[1., 0.             , 0.             , 0.],
+                               [0., np.cos(-theta) , np.sin(-theta) , 0.],
+                               [0., -np.sin(-theta), np.cos(-theta) , 0.],
+                               [0., 0.             , 0.             , 1.]], dtype='double')
+            iMM3a = np.linalg.inv(MM3a)
+            MMa=MM1a@MM2a@MM3a
+            data3a = np.einsum('ij,abjc->abic', iMM3a, data2a)
+
+        else:
+            iMM2a = MM2a = np.array( [[1., 0., 0., 0.],
+                                    [0., 1., 0., 0.],
+                                    [0., 0., 1., 0.],
+                                    [0., 0., 0., 1.]], dtype='double')
+            data2a =  np.einsum('ij,abjc->abic', iMM2a, data1a)
+        
+            # Apply final sign correction to match original spectra
+            iMM3a = np.array( [[1., 0., 0., 0.],
+                            [0., 1., 0., 0.],
+                            [0., 0., 1., 0.],
+                            [0., 0., 0., 1.]], dtype='double')
+            MM3a = np.linalg.inv(iMM3a)
+            MMa=MM1a@MM2a@MM3a
+            data3a = np.einsum('ij,abjc->abic', iMM3a, data2a)
+        
+        return MM1a, MM2a, MM3a, None, None, None, data3a
 
 def crosstalk_auto_ItoQUV(data_demod,cpos,wl,roi=np.ones((2048,2048)),verbose=0,npoints=5000,limit=0.2):
     """Get crosstalk coefficients for I to Q,U,V
@@ -1100,6 +1672,7 @@ def polarimetric_registration(data, sly, slx, hdr_arr):
     hdr_arr: ndarray
         header array with updated CAL_PREG keyword
     """
+
     pn = 4 
     wln = 6 
     # iterations = 3
@@ -1166,6 +1739,7 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr):
     hdr_arr: ndarray
         header array with updated CAL_WREG keyword
     """
+
     pn = 4
     wln = 6
     
@@ -1271,7 +1845,7 @@ def create_intermediate_hdr(data, hdr_interm, history_str, file_name, **kwargs):
     return hdr
 
 
-def write_out_intermediate(data_int, hdr_interm, history_str, scan, root_scan_name, suffix, out_dir, **kwargs):
+def write_out_intermediate(data_int, hdr_interm, history_str, scan, root_scan_name, suffix, version, out_dir, **kwargs):
     """Write out intermediate files to output directory
 
     Parameters
@@ -1288,6 +1862,8 @@ def write_out_intermediate(data_int, hdr_interm, history_str, scan, root_scan_na
         root file name of the intermediate file to be written
     suffix: str
         suffix to be added to the intermediate file name
+    version: str
+        version of the file
     out_dir: str
         output directory
     **kwargs: dict
@@ -1297,23 +1873,24 @@ def write_out_intermediate(data_int, hdr_interm, history_str, scan, root_scan_na
     -------
     None
     """
-    hdr_int = create_intermediate_hdr(data_int, hdr_interm, history_str, f'{root_scan_name}_{suffix}.fits', **kwargs)
+    hdr_int = create_intermediate_hdr(data_int, hdr_interm, history_str, f'{suffix}_V{version}_{root_scan_name}.fits', **kwargs)
 
     with fits.open(scan) as hdu_list:
-        print(f"Writing intermediate file as: {root_scan_name}_{suffix}.fits")
+        print(f"Writing intermediate file as: {suffix}_V{version}_{root_scan_name}.fits")
         hdu_list[0].data = data_int.astype(np.float32)
         hdu_list[0].header = hdr_int #update the calibration keywords
-        hdu_list.writeto(out_dir + root_scan_name + f'_{suffix}.fits', overwrite=True)
+        hdu_list.writeto(out_dir + f'{suffix}_V{version}_{root_scan_name}.fits', overwrite=True)
 
         
-def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, TemperatureCorrection = False, level = 'CAL2', version = 'V01', out_dir = None):   
+def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, TemperatureCorrection = False, TemperatureConstant = 36.46e-3, level = 'CAL2', version = 'V01', out_dir = None):   
     # from sophi_hrt_pipe.processes import apply_field_stop, hot_pixel_mask
     PD, h = get_data(data_f,True,True,True)
     
     start_row = int(h['PXBEG2']-1)
     start_col = int(h['PXBEG1']-1)
     data_size = PD.shape[1:]
-    
+    nfocus = PD.shape[0]
+
     rows = slice(start_row,start_row + data_size[0])
     cols = slice(start_col,start_col + data_size[1])
 
@@ -1344,19 +1921,20 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         prefilter = prefilter[:,::-1]
     
         tunning_constant = 0.0003513 # this shouldn't change
-        temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
-        ref_wavelength = 6173.341 # this shouldn't change
-        Tfg = h['FGH_TSP1']
+        # temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
+        # temperature_constant_new = 36.46e-3 # value from HSref_wavelength = 6173.341 # this shouldn't change
+        ref_wavelength = 6173.341
+        Tfg = h['FGOV1PT1'] # ['FGH_TSP1']
         Volt = fits.open(data_f)[3].data['PHI_FG_voltage'][0]
         if TemperatureCorrection:
-            wl = Volt * tunning_constant + ref_wavelength + temperature_constant_new*(Tfg-61)
+            wl = Volt * tunning_constant + ref_wavelength + TemperatureConstant*(Tfg-61)
         else:
             wl = Volt * tunning_constant + ref_wavelength
-        fakePD = np.zeros((data_size[0],data_size[1],4,6,1)); fakePD[:,:,0,:,0] = np.moveaxis(PD.copy(),0,-1);
+        fakePD = np.zeros((data_size[0],data_size[1],4,nfocus,1)); fakePD[:,:,0,:,0] = np.moveaxis(PD.copy(),0,-1);
         # voltagesData_arr = [np.asarray([Volt,Volt,Volt,Volt,Volt,Volt])]
-        wlData_arr = [np.asarray([wl,wl,wl,wl,wl,wl])]
-        fakePD = prefilter_correction(fakePD,wlData_arr,prefilter[rows,cols],None,True)
-        PD = np.squeeze(np.moveaxis(fakePD[:,:,0,:2,0],2,0))
+        wlData_arr = [np.ones(nfocus)*wl]
+        fakePD = prefilter_correction(fakePD,wlData_arr,prefilter[rows,cols],None,TemperatureCorrection,TemperatureConstant)
+        PD = np.squeeze(np.moveaxis(fakePD[:,:,0,:,0],2,0))
         
     
     # Voltage is 850, same as the continuum in the observations on the same day
@@ -1372,7 +1950,7 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         
         F = compare_IMGDIRX(F,True,'YES',header_flatdirx_exists,flatdirx_flipped)
         F = stokes_reshape(F)
-        wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True,TemperatureCorrection=TemperatureCorrection)
+        wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)
 
         if norm_f:
             F = F/F[slice(1024-256,1024+256),slice(1024-256,1024+256)].mean(axis=(0,1))[np.newaxis,np.newaxis]
@@ -1380,7 +1958,7 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
             F = F/F[slice(0,2048),slice(0,2048)].mean(axis=(0,1))[np.newaxis,np.newaxis]
 
         if prefilter_f is not None:
-            F = prefilter_correction(F[...,np.newaxis],[wave_flat],prefilter,None,True)[...,0]
+            F = prefilter_correction(F[...,np.newaxis],[wave_flat],prefilter,None,TemperatureCorrection,TemperatureConstant)[...,0]
             
         PD = PD / F[np.newaxis,rows,cols,0,cpos_f]
     
@@ -1407,12 +1985,47 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         temp[1][1][13:]
         name = temp[0]+level+temp[1][0]+version+temp[1][1][13:]
 
+        # add wavelength keywords
+        previousKey = 'WAVEMAX'
+        for i in range(1):
+            newKey = f'WAVE{i+1}'
+            h.set(newKey, round(wl,3), f'[Angstrom] {i+1}. wavelength of observation', after=previousKey)
+            previousKey = newKey
+        # add voltage keywords
+        for i in range(1):
+            newKey = f'VOLTAGE{i+1}'
+            h.set(newKey, int(Volt), f'[Volt] {i+1}. voltage of observation', after=previousKey)
+            previousKey = newKey
+        # add continuum position keywords
+        # newKey = 'CONTPOS'
+        # h.set(newKey, int(cpos+1), 'continuum position (1: blue, 6: red)', after=previousKey)
+        # previousKey = newKey
+        # add voltage tuning constant keywords
+        newKey = 'TUNCONS'
+        h.set(newKey, tunning_constant, f'[Angstrom / Volt] voltage tuning constant', after=previousKey)
+        previousKey = newKey
+        # add temperature tuning constant keywords
+        newKey = 'TEMPCONS'
+        if TemperatureCorrection:
+            h.set(newKey, TemperatureConstant, '[Angstrom / Kelvin] temperature constant', after=previousKey)
+        else:
+            h.set(newKey, 0, '[Angstrom / Kelvin] temperature constant', after=previousKey)
+        previousKey = newKey
+
+        # dark file
+        h['CAL_DARK'] = dark_f
+        # flat file
+        h['CAL_FLAT'] = flat_f
+        if prefilter_f is not None:
+            h['CAL_PRE'] = prefilter_f
+        # change NAXIS1, 2
+        h.comments['NAXIS1'] = 'number of pixels on the x axis'
+        h.comments['NAXIS2'] = 'number of pixels on the y axis'
+        
         with fits.open(data_f) as hdr:
             hdr[0].data = PD
-            hdr[0].header['CAL_DARK'] = dark_f
-            hdr[0].header['CAL_FLAT'] = flat_f
-            if prefilter_f is not None:
-                hdr[0].header['CAL_PRE'] = prefilter_f
+            hdr[0].header = h
+            
             hdr.writeto(out_dir+name, overwrite=True)
     
     return PD
@@ -1500,7 +2113,7 @@ def SCGravitationalRedshift(hdr):
     
     return vg
 
-def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True,prefilter_f=None,solar_rotation=True):
+def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True, TemperatureConstant = 36.46e-3,prefilter_f=None,solar_rotation=True):
     """
     Cavity Map computation from flat field.
     This function returns the Cavity errors in \AA at each polarimetric modulation.
@@ -1511,6 +2124,7 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True,pr
     out_name: name of the output file. If None, no output file is saved. Header from the parent flat field + some changes (Default: None)
     nc (int): number of cores to be used for parallel computing (Default: 32)
     TemperatureCorrection (bool): if True, wavelengths are corrected for the etalon temperature (Default: True)
+    TemperatureConstant (float): value of the temperature tuning constant to be used when TemperatureConstant is True (Default: 36.46e-3 mA/K)
     prefilter_f: file name of the prefilter. If None, no prefilter correction is applied (Default: None)
     solar_rotation (bool): if True, Doppler shift due to solar rotation is removed from the cavity (Default: True)
     
@@ -1612,7 +2226,7 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True,pr
     hh = fits.open(filen)
     idx = np.where(hh[8].data['PHI_PROC_operation']=='PROC_MEAN')[0]+1
     values = hh[8].data['PHI_PROC_scalar1'][idx]*0.125
-    wl, v, _, cpos = fits_get_sampling(filen,TemperatureCorrection = TemperatureCorrection, verbose=False)
+    wl, v, _, cpos = fits_get_sampling(filen,TemperatureCorrection = TemperatureCorrection, TemperatureConstant=TemperatureConstant, verbose=False)
     if cpos == 0:
         values /= values[:4].mean()
     else:
@@ -1624,7 +2238,7 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True,pr
     if prefilter_f is not None:
         print("Prefilter correction")
         prefilter = fits.getdata(prefilter_f)[:,::-1]
-        flat = prefilter_correction(flat.copy()[...,np.newaxis],[wl],prefilter,TemperatureCorrection=TemperatureCorrection)[...,0]
+        flat = prefilter_correction(flat.copy()[...,np.newaxis],[wl],prefilter,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)[...,0]
     
     CM = np.zeros((4,flat.shape[0],flat.shape[1]))
     for p in range(4):
