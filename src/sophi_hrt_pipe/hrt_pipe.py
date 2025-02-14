@@ -1259,7 +1259,7 @@ def phihrt_pipe(input_json_file):
     #-----------------
     if (out_unreconstructed and PSFstokes['deconvolution']) and ~out_intermediate:
         print(" ")
-        printc('Saving unreconstructed stokes files',color=bcolors.OKGREEN)
+        print('Saving unreconstructed stokes files')
 
         for count, scan in enumerate(data_f):
             history_str = f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {ItoQUV}. PSF deconvolution: {True}"
@@ -1294,7 +1294,7 @@ def phihrt_pipe(input_json_file):
         
     if out_ancillary:
         print(" ")
-        printc('Saving \'ancillary\' file including: \n\tdeconvolved PSF;\n\tActive Regions mask;\n\tLimb mask;\n\tsub ROI.\n',color=bcolors.OKGREEN)
+        print('Saving \'ancillary\' file including: \n\tdeconvolved cavity map;\n\tActive Regions mask;\n\tLimb mask;\n\tsub ROI.\n')
 
         Nanc = 4
         for count, scan in enumerate(data_f):
