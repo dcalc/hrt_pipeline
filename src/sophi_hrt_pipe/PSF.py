@@ -1134,7 +1134,8 @@ def stokes_restoration(stokes_data,coefs,sly = slice(0,2048), slx = slice(0,2048
     else:
         res_cavity = None
     
-    return res_stokes, res_cavity
+    PSF = ifftshift(ifft2(fftshift(Hk.squeeze()))).real[pad_width:im0.shape[0]-pad_width,pad_width:im0.shape[1]-pad_width]
+    return res_stokes, res_cavity, PSF
 
 def edge_masking(stokes, mask, cavity=None):
     """
@@ -1237,9 +1238,9 @@ def fran_restore(stokes_data, tobs, mask=None, sly = slice(0,2048), slx = slice(
     #                                 denoise=denoise,
     #                                 wind_opt=wind_opt,low_f=low_f,
     #                                 num_iter=num_iter, aberr_cor=aberr_cor,padding=padding, cavity=cavity)
-    res_stokes, res_cavity = stokes_restoration(stokes_data_edge,coefs,sly=sly,slx=slx,rest=rest, gamma2=gamma2,
-                                    denoise=denoise, wind_opt=wind_opt,low_f=low_f,
-                                    num_iter=num_iter, aberr_cor=aberr_cor, straylight_corr=straylight_corr,padding=padding, cavity=cavity)
+    res_stokes, res_cavity, PSF = stokes_restoration(stokes_data_edge,coefs,sly=sly,slx=slx,rest=rest, gamma2=gamma2,
+                                        denoise=denoise, wind_opt=wind_opt,low_f=low_f,
+                                        num_iter=num_iter, aberr_cor=aberr_cor, straylight_corr=straylight_corr,padding=padding, cavity=cavity)
     
     if mask is not None:
         res_stokes[mask==0] = stokes_data[mask==0]
@@ -1247,6 +1248,6 @@ def fran_restore(stokes_data, tobs, mask=None, sly = slice(0,2048), slx = slice(
             res_cavity[mask==0] = res_cavity[mask==0]
     
     if res_cavity is not None:
-        return res_stokes, coefs, res_cavity
+        return res_stokes, coefs, PSF, res_cavity
     else:
-        return res_stokes, coefs
+        return res_stokes, coefs, PSF

@@ -8,10 +8,13 @@ import git
 from numpy.core.numeric import True_
 from scipy.ndimage import binary_dilation, binary_erosion, generate_binary_structure
 
-from sophi_hrt_pipe.utils import *
-from sophi_hrt_pipe.processes import *
-from sophi_hrt_pipe.inversions import *
-from sophi_hrt_pipe.PSF import *
+from .utils import printc, bcolors, get_data, fits_get_sampling, check_size, check_cpos, check_pmp_temp, stokes_reshape, compare_IMGDIRX, compare_cpos, load_fits, cavity_shifts, ARmasking, check_IMGDIRX, check_filenames
+
+from .processes import setup_header, apply_dark_correction, load_and_process_flat, prefilter_correction, normalise_flat, unsharp_masking, flat_correction, apply_field_stop, hot_pixel_mask, load_ghost_field_stop, polarimetric_registration, wavelength_registration, demod_hrt, crosstalk_2D_ItoQUV, crosstalk_auto_VtoQU, CT_VtoQU, write_out_intermediate, data_hdr_kw, limb_ellipse
+
+from .inversions import generate_l2, create_output_filenames
+
+from .PSF import fran_restore
 
 def phihrt_pipe(input_json_file):
 
@@ -199,6 +202,8 @@ def phihrt_pipe(input_json_file):
         out_synthesis = input_dict.pop('out_synthesis', False)
         out_ancillary = input_dict.pop('out_ancillary', False)
         out_unreconstructed = input_dict.pop('out_unreconstructed', False)
+
+        wcs_update = input_dict.pop('wcs_update', False)
 
         # pymilos_opt = input_dict['pymilos']
         
@@ -1079,13 +1084,13 @@ def phihrt_pipe(input_json_file):
                                                gamma2=PSFstokes['gamma2'], low_f=PSFstokes['low_f'], 
                                                aberr_cor=PSFstokes['aberration_correction'], straylight_corr=PSFstokes['straylight_correction'],
                                                cavity=cavity[rows,cols], PD_f = PSFstokes['PD_f'])
-                res_stokes, coefs, cavity = restore_results
+                res_stokes, coefs, PSF, cavity = restore_results
             else:
                 restore_results = fran_restore(data[...,scan], datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), rest=PSFstokes['method'], mask=mask, sly=psfy, slx=psfx,
                                              gamma2=PSFstokes['gamma2'], low_f=PSFstokes['low_f'], aberr_cor=PSFstokes['aberration_correction'],
                                              straylight_corr=PSFstokes['straylight_correction'], 
                                              cavity=None, PD_f = PSFstokes['PD_f'])
-                res_stokes, coefs = restore_results
+                res_stokes, coefs, PSF = restore_results
                 cavity = None
 
             if cpos_arr[scan] == 5: # set continuum back in its position
@@ -1106,6 +1111,7 @@ def phihrt_pipe(input_json_file):
     else:
         print(" ")
         printc('-->>>>>>> No PSF deconvolution on Stokes vectors',color=bcolors.WARNING)
+        PSF = np.zeros((data.shape[0],data.shape[1]))
 
     #-----------------
     # CHECK FOR INFs
@@ -1294,9 +1300,9 @@ def phihrt_pipe(input_json_file):
         
     if out_ancillary:
         print(" ")
-        print('Saving \'ancillary\' file including: \n\tdeconvolved cavity map;\n\tActive Regions mask;\n\tLimb mask;\n\tsub ROI.\n')
+        print('Saving \'ancillary\' file including: \n\tdeconvolved cavity map;\n\tActive Regions mask;\n\tLimb mask;\n\tsub ROI;\n\tPSF.\n')
 
-        Nanc = 4
+        Nanc = 5
         for count, scan in enumerate(data_f):
             anc = np.zeros((Nanc, data_size[0], data_size[1]))
             if cavity_c and PSFstokes['deconvolution']:
@@ -1306,6 +1312,7 @@ def phihrt_pipe(input_json_file):
             roi_mask = np.zeros((data_size[0],data_size[1]))
             roi_mask[sly,slx] = 1
             anc[3] = roi_mask; del roi_mask
+            anc[4] = PSF
 
             anc_f= create_output_filenames(scan, hdr_arr[count]['PHIDATID'], version = vrs, gzip = True)[0].replace('stokes','ancillary')
             hdu_anc = fits.PrimaryHDU(anc.astype(np.float32))
@@ -1318,6 +1325,7 @@ def phihrt_pipe(input_json_file):
             hdu_anc.header['ANCILL2'] = 'AR mask'
             hdu_anc.header['ANCILL3'] = 'Limb mask'
             hdu_anc.header['ANCILL4'] = 'ROI mask'
+            hdu_anc.header['ANCILL5'] = 'PSF'
             hdu_anc.header['HISTORY'] = f"Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {ItoQUV}. PSF deconvolution: {hdr_arr[count]['CAL_PSF']}. Cavity correction: {cavity_c}"
 
             hdu_anc.writeto(out_dir + anc_f,overwrite=True)
@@ -1415,7 +1423,7 @@ def phihrt_pipe(input_json_file):
 
         generate_l2(data_f, hdr_arr, wave_axis_arr, cpos_arr, 
                     data, mask, imgdirx_flipped, out_rte_filename, out_dir, 
-                    cavity, rows, cols, vrs, out_synthesis,
+                    cavity, rows, cols, vrs, out_synthesis, wcs_update,
                     **RTE_options)
                     
         # if pymilos_opt:

@@ -1,6 +1,12 @@
 import numpy as np
 from scipy.ndimage import gaussian_filter
-from sophi_hrt_pipe.utils import *
+from matplotlib import pyplot as plt
+import datetime
+from astropy.io import fits
+import scipy.optimize as spo
+
+from .utils import get_data, fits_get_sampling, filling_data, compare_IMGDIRX, compare_cpos, printc, bcolors, fits_get_sampling, filling_data, compare_IMGDIRX, compare_cpos, load_fits, image_derivative, fft_shift, SPG_shifts_FFT, stokes_reshape, find_nearest
+from .coordinates import solarRotation, SCVelocityResidual, meridionalFlow, SCGravitationalRedshift, convectiveBlueshift, mu_angle, center_coord
 import os
 import time
 import cv2
@@ -1520,7 +1526,410 @@ def hot_pixel_mask(data, rows, cols, mode='median'):
     
     return data
 
+def limb_side_finder(img, hdr,verbose=True):
+    """find the limb in the image
+
+    Parameters
+    ----------
+    img : 2D array
+        data array
+    hdr : header
+        header of the fits file
+    verbose : bool, optional
+        print the limb side, by default True
     
+    Returns
+    -------
+    side: str
+        limb side
+    center: [x,y] 
+        coordinates of the solar disk center (units: pixel)
+    Rpix: float
+        Radius of solar disk in pixels
+    sly: slice
+        slice in y direction to be used for normalisation
+    slx: slice
+        slice in x direction to be used for normalisation
+    """
+    Rpix=(hdr['RSUN_ARC']/hdr['CDELT1'])
+    center = center_coord(hdr)[:2] - 1
+    # limb_wcs = circular_mask(hdr['PXEND2']-hdr['PXBEG2']+1,
+    #                          hdr['PXEND1']-hdr['PXBEG1']+1,center,Rpix)
+    
+    mus = mu_angle(hdr,np.asarray([[0,0],
+                       [hdr['NAXIS1'],0],
+                       [hdr['NAXIS1'],hdr['NAXIS2']],
+                       [0,hdr['NAXIS2']]],
+                      dtype=float).T
+                    )
+    
+    if np.any(np.isnan(mus)) or np.any(mus <= 0.2):
+        x0 = hdr['NAXIS1']/2 - center[0]
+        y0 = hdr['NAXIS2']/2 - center[1]
+        angle = np.arctan(y0/x0) * 180/np.pi
+
+        if x0 < 0 and y0 >= 0:
+            angle += 180
+        elif x0 < 0 and y0 < 0:
+            angle +=180
+        elif x0 >= 0 and y0 < 0:
+            angle += 360
+
+        limbs = ['W','NW','N','NE','E','SE','S','SW','W']
+        limb_idx = find_nearest(np.arange(0,361,45),angle)
+        side = limbs[limb_idx]
+        if verbose:
+            print('Limb side:',side)
+    else:
+        side = ''
+        if verbose:
+            print('Limb is not in the FoV according to WCS keywords')
+
+    ds = 256
+    if hdr['DSUN_AU'] < 0.4:
+        if side == '':
+            ds = 384
+    dx = 0; dy = 0
+    if 'N' in side and img.shape[0]//2 - ds > img.shape[0]//4:
+        dy = -img.shape[0]//4
+    if 'S' in side and img.shape[0]//2 - ds > img.shape[0]//4:
+        dy = img.shape[0]//4
+    if 'W' in side and img.shape[1]//2 - ds > img.shape[1]//4:
+        dx = -img.shape[1]//4
+    if 'E' in side and img.shape[1]//2 - ds > img.shape[1]//4:
+        dx = img.shape[1]//4
+
+    if img.shape[0] > 2*ds:
+        sly = slice(img.shape[0]//2 - ds + dy, img.shape[0]//2 + ds + dy)
+    else:
+        sly = slice(0,img.shape[0])
+    if img.shape[1] > 2*ds:
+        slx = slice(img.shape[1]//2 - ds + dx, img.shape[1]//2 + ds + dx)
+    else:
+        slx = slice(0,img.shape[1])
+    
+    return side, center, Rpix, sly, slx
+
+#### New Limb fitting ###
+def double_gaus(x,a0,x0,sigma0,a1,x1,sigma1):
+    """return Gauss function
+
+    Parameters
+    ----------
+    x : array
+        x values
+    a0 : float
+        gaussian nr.1 amplitude
+    x0 : float
+        gaussian nr.1 mean x value
+    sigma0 : float
+        gaussian nr.1 standard deviation
+    a1 : float
+        gaussian nr.2 amplitude
+    x1 : float
+        gaussian nr.2 mean x value
+    sigma1 : float
+        gaussian nr.2 standard deviation
+
+    Returns
+    -------
+    Double Gauss Function : array
+    """
+    return a0*np.exp(-(x-x0)**2/(2*sigma0**2)) + a1*np.exp(-(x-x1)**2/(2*sigma1**2))
+
+def double_gaussian_fit(a,show=True,covariance=False):
+    """Two Gaussian fit for data 'a' from np.histogram or plt.hist
+    The gaussian must be complitely separated and on opposite sides of the distribution
+    Parameters
+    ----------
+    a : array
+        output from np.histogram or plt.hist
+    show : bool, optional
+        show plot of fit, by default True
+    covariance: bool, optional
+        if True, reutn the covariance matrix (Default: False)
+    Returns
+    -------
+    p : array
+        fitted coefficients for Double Gaussian function
+    """
+    xx=a[1][:-1] + (a[1][1]-a[1][0])/2
+    y=a[0][:]
+    # p0 = np.ones(6)
+    xx1 = xx[:xx.size//3]; xx2 = xx[xx.size//3:]
+    y1 = y[:y.size//3]; y2 = y[y.size//3:]
+    p0=[max(y1),sum(xx1*y1)/sum(y1),np.sqrt(sum(y1 * (xx1 - sum(xx1*y1)/sum(y1))**2) / sum(y1)),max(y2),sum(xx2*y2)/sum(y2),np.sqrt(sum(y2 * (xx2 - sum(xx2*y2)/sum(y2))**2) / sum(y2))] #weighted avg of bins for avg and sigma inital values
+    # p0[0]=y1[find_nearest(xx1,p0[1])-5:find_nearest(xx1,p0[1])+5].mean() #find init guess for ampltiude of gauss func
+    # p0[3]=y2[find_nearest(xx2,p0[1])-5:find_nearest(xx2,p0[1])+5].mean() #find init guess for ampltiude of gauss func
+    
+    try:
+        bounds = ([0,xx1.min(),-xx1.max(),0,xx2.min(),-xx1.max()],[y1.sum(),xx1.max(),xx1.max(),y2.sum(),xx2.max(),xx1.max()])
+        p,cov=spo.curve_fit(double_gaus,xx,y,p0=p0,bounds=bounds)
+        if show:
+            lbl = '{:.2e} $\pm$ {:.2e}\n{:.2e} $\pm$ {:.2e}'.format(p[1],p[2],p[4],p[5])
+            plt.plot(xx,double_gaus(xx,*p),'r--', label=lbl)
+            plt.legend(fontsize=9)
+        if covariance:
+            return p,cov
+        else:
+            return p
+    except:
+        printc("Gaussian fit failed: return initial guess",color=bcolors.WARNING)
+        if covariance:
+            cov = np.zeros((len(p0),len(p0))); cov[:] = np.nan
+            return p0, cov
+        else:
+            return p0
+    
+def elliptical_mask(shape,p):
+    """
+    Ellipse mask
+
+    Parameters
+    ----------
+    shape : tuple
+            shape of the mask
+    p : list
+        [a,b,h,k,A] - ellipse axes (x,y), centers (x,y) and angle
+
+    Returns
+    -------
+    mask: numpy.ndarray
+          Boolean elliptical mask with 1 inside the ellipse and 0 outside
+    """    
+    a,b,h,k,A = p
+    x,y = np.meshgrid(np.arange(shape[1]),np.arange(shape[0]))
+    mask = np.zeros(shape)
+    mask[((x-h)*np.cos(A)+(y-k)*np.sin(A))**2/a**2+((x-h)*np.sin(A)-(y-k)*np.cos(A))**2/b**2 <= 1] = 1
+
+    return mask
+
+def fit_plane(data, mask=None, order=1):
+
+    """
+    Fit 2D plane to data. Will be replazed by a global one (comming from had-hoc branch) at some point.
+    """
+    def _polyfit2d(a,XY,order):
+        from scipy.optimize import curve_fit
+        sz = a.shape
+        try:
+            X,Y = XY
+        except:
+            X,Y = np.meshgrid(np.arange(sz[1])-sz[1]//2,np.arange(sz[0])-sz[0]//2)
+        fit_func = lambda x, *p : poly2d(order,x,*p)
+        
+        try:
+            X = X[~X.mask]; Y = Y[~Y.mask]; a = a[~a.mask]
+        except:
+            pass
+        N = np.arange(1,order+2).sum()
+        popt, pcov = curve_fit(fit_func, (X,Y), a.ravel(),p0=np.ones(N))
+        
+        return popt#, np.reshape(poly2d(order,(X,Y), *popt), sz),
+
+    def poly2d(m, X, *p):
+        x,y = X
+        z = np.zeros(x.shape)
+        n = 0
+        for k in range(1,m+1):
+            for i in range(k+1):
+                z += x**(k-i) * y**i * p[n]
+                n += 1
+        z += p[-1]
+        return z.ravel()
+    
+    yd, xd = data.shape
+    x = np.arange(xd)
+    y = np.arange(yd)
+    X, Y = np.meshgrid(x, y)
+
+    if mask is not None:
+        X_masked = X[mask]
+        Y_masked = Y[mask]
+        Z_masked = data[mask]
+    else:
+        X_masked = X
+        Y_masked = Y
+        Z_masked = data
+
+    p = _polyfit2d(Z_masked.flatten(),(X_masked.flatten(),Y_masked.flatten()),order)
+    P = np.reshape(poly2d(order,(X,Y), *p), (yd,xd))
+
+    return (P, p)
+
+def subROIconstrast(img, img_mask, windowSize, windowSeparation):
+    """Align the mod (pol) states 2,3,4 with state 1 for a given wavelength
+    loop through all wavelengths
+
+    Parameters
+    ----------
+    img: ndarray
+        2D input image array
+    img_mask: boolean ndarray
+        mask that defines where to compute the contrast
+    windowSize: int
+        half size of the sub regions where to compute the contrast
+    windowSeparation: int
+        sepration between the center of the sub regions where to compute the contrast
+    
+    Returns
+    -------
+    contrast: ndarray
+        values of the contrast (all zeros except for the pixels corresponding to the center of the sub regions)
+
+    """
+
+    data_size = img.shape
+    contrast = np.zeros((img.shape))
+    # shift_raw = np.zeros((2,pn*wln))
+
+    for i in list(range(int(50),int(data_size[0]-50),windowSeparation))+list(range(int(data_size[0]-50),int(50),-windowSeparation)):
+        for j in list(range(int(50),int(data_size[1]-50),windowSeparation))+list(range(int(data_size[1]-50),int(50),-windowSeparation)):
+             # print(f'({i}/{data_size[0]}, {j}/{data_size[1]})')#\r',end='')
+            roi = (slice(i-windowSize,i+windowSize),slice(j-windowSize,j+windowSize))
+            if img_mask[roi].sum() == 4*windowSize**2:
+                temp = img[roi].copy()
+                # detrend
+                temp /= fit_plane(temp.copy(),order=5)[0]
+                contrast[i,j] = np.nanstd(temp)/np.nanmean(temp)
+            
+    return contrast
+
+def limb_ellipse(img, hdr, field_stop, AR_mask, verbose=True, percent=False, fit_results=False, high_contrast = True, debug=False):
+    """Fits limb to the image using least squares method.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Image to fit limb to.
+    hdr : astropy.io.fits.header.Header
+        header of fits file
+    field_stop : array
+        field stop array
+    verbose : bool, optional
+        Print limb fitting results, by default True
+    percent : bool, optional
+        return mask with 96% of the readius, by default False
+    fit_results : bool, optional
+        return results of the circular fit, by default False
+    high_contrast : bool, optional
+        if true it returns slices from the region with higher contrast instead of those from limb_side_finder, by default True
+    debug: bool, optional
+        if True, return dictionary with all the variables, by default False
+    Returns
+    -------
+    mask100: numpy.ndarray
+        masked array (ie off disc region) with 100% of the radius
+    sly: slice
+        slice in y direction to be used for normalisation (ie good pixels on disc)
+    slx: slice
+        slice in x direction to be used for normalisation (ie good pixels on disc)
+    side: str
+        limb side
+    mask96: numpy.ndarray
+        masked array (ie off disc region) with 96% of the radius (only if percent = True)
+    p: scipy.optimize._optimize.OptimizeResult
+        Result of the least sqaure ellipse fit
+    """
+
+    def _residuals(p,x,y):
+        """
+        Finding the residuals of the fit
+
+        Parameters
+        ----------
+        p : list
+            [a,b,h,k,A] - ellipse axes (x,y), centers (x,y) and angle
+        x : float
+            test x coordinate
+        y : float
+            test y coordinate
+
+        Returns
+        -------
+        residual = ((x-h)*np.cos(A)+(y-k)*np.sin(A))**2/a**2 + (-(x-h)*np.sin(A)+(y-k)*np.cos(A))**2/b**2 - 1
+        """
+
+        a,b,h,k,A = p
+        residual = ((x-h)*np.cos(A)+(y-k)*np.sin(A))**2/a**2 + (-(x-h)*np.sin(A)+(y-k)*np.cos(A))**2/b**2 - 1
+
+        return residual
+
+    from scipy.optimize import least_squares
+    from scipy.ndimage import binary_erosion, binary_dilation
+
+    side, center, Rpix, sly, slx = limb_side_finder(img,hdr,verbose=verbose)
+    if side == '': # margin on side in limb_side_finder
+        output = [None,sly,slx,side]
+        
+        if percent:
+            output += [None]
+        if fit_results:
+            output += [None]    
+
+        return output
+
+    s = 5
+
+    hi = np.histogram(img[s:-s,s:-s][AR_mask[s:-s,s:-s]>0].flatten(),bins=100);
+    gres, cov = double_gaussian_fit(hi,False,True)
+    
+    if (np.any((np.sqrt(np.diagonal(cov))/gres)[:3] > 100) or np.any(np.isnan(cov))): # sometimes south pole limb is not found, so extra condition on fit
+        output = [None,sly,slx,side]
+        
+        if debug:
+            return {'hi':hi,'gres':gres,'cov':cov,'center':center,'Rpix':Rpix}
+        if percent:
+            output += [None]
+        if fit_results:
+            output += [None]    
+
+        return output
+
+    xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
+    thr = xx[find_nearest(xx,min(gres[1],gres[4]))+np.argmin(hi[0][find_nearest(xx,min(gres[1],gres[4])):find_nearest(xx,max(gres[1],gres[4]))])]
+
+    limb_mask = img[s:-s,s:-s]>thr;
+    
+    # dilation and erosion to remove any possible zeros coming from umbrae
+    # border_value=1 in erosion to avoid black edges
+    limb_mask = binary_erosion(binary_dilation(limb_mask,[[0,1,0],[1,1,1],[0,1,0]],iterations=20),[[0,1,0],[1,1,1],[0,1,0]],iterations=20,border_value=1)
+    
+    # erosion of field stop to avoid edges from there
+    limb_edge = image_derivative(limb_mask)*binary_erosion(field_stop,[[0,1,0],[1,1,1],[0,1,0]],iterations=20)[s:-s,s:-s]
+    yi, xi = np.where(limb_edge>0.9)
+
+    p = least_squares(_residuals,x0 = [Rpix,Rpix,center[0],center[1],0], args=(xi,yi),
+                              bounds = ([Rpix-100,Rpix-100,center[0]-300,center[1]-300,-np.pi/2],[Rpix+100,Rpix+100,center[0]+300,center[1]+300,np.pi/2]))
+
+    mask100 = elliptical_mask(img.shape,p.x)
+    mask98 = elliptical_mask(img.shape,[p.x[0]*.98,p.x[1]*.98,p.x[2],p.x[3],p.x[4]])
+    mask96 = elliptical_mask(img.shape,[p.x[0]*.96,p.x[1]*.96,p.x[2],p.x[3],p.x[4]])
+    
+    if high_contrast:
+        # if hdr['DSUN_AU'] < 0.4:
+        #     windowSize = 384
+        # else:
+        windowSize = 256
+        contrast256 = subROIconstrast(img.copy(), (field_stop*mask98)>0, windowSize, windowSize)
+        i,j = np.unravel_index(np.argmax(contrast256),contrast256.shape)
+        sly,slx = slice(i-windowSize,i+windowSize), slice(j-windowSize,j+windowSize)
+        print('\nHigh contrast slices: ',sly,slx,'\n')
+
+    output = [sly,slx,side]
+
+    output = [mask100] + output
+    
+    if debug:
+        return {'mask100':mask100,'mask96':mask96,'hi':hi,'gres':gres,'thr':thr,'xx':xx,'limb_mask':limb_mask,'limb_edge':limb_edge,'yi':yi,'xi':xi,'p':p}
+    if percent:
+        output += [mask96]
+    if fit_results:
+        output += [p]    
+
+    return output
+    ######
+
 def crosstalk_auto_VtoQU(data_demod,cpos,wl,roi=np.ones((2048,2048)),verbose=0,npoints=5000,nlevel=0.3):
     """Get crosstalk coefficients for V to Q,
 
@@ -1771,7 +2180,7 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr, derivative = True
             dat = data[sly.start-5:sly.stop+5,slx.start-5:slx.stop+5,:,:,scan].copy()
             # old_data, _ = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']),
             #                             mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0.02, low_f=0.8, aberr_cor=False)
-            old_data, _ = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), sly=slice(0,dat.shape[0]), slx=slice(0,dat.shape[1]),
+            old_data, _, _ = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), sly=slice(0,dat.shape[0]), slx=slice(0,dat.shape[1]),
                                         mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0, low_f=0.1, aberr_cor=False, PD_f=deconv['PD_f'], straylight_corr=deconv['straylight_correction'])
             sly, slx = slice(5,sly.stop-sly.start+5), slice(5,slx.stop-slx.start+5)
         else:
@@ -2051,89 +2460,6 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
     
     return PD
 
-def solarRotation(hdr):
-    # vrot from hathaway et al., 2011, values in deg/day
-    # proper vlos projection without thetarho ~ 0 approximation from Schuck et al., 2016
-    X = ccd2HGS(hdr)
-    HPCx, HPCy, HPCd = ccd2HPC(hdr)
-    thetarho = np.arctan(np.sqrt(np.cos(HPCy*u.arcsec)**2*np.sin(HPCx*u.arcsec)**2+np.sin(HPCy*u.arcsec)**2) / 
-                      (np.cos(HPCy*u.arcsec)*np.cos(HPCx*u.arcsec)))
-    psi = np.arctan(-(np.cos(HPCy*u.arcsec)*np.sin(HPCx*u.arcsec)) / np.sin(HPCy*u.arcsec))
-    psi[np.logical_and(HPCy>=0,HPCx<0)] += 0 * u.rad
-    psi[np.logical_and(HPCy<0,HPCx<0)] += np.pi * u.rad
-    psi[np.logical_and(HPCy<0,HPCx>=0)] += np.pi * u.rad
-    psi[np.logical_and(HPCy>=0,HPCx>=0)] += 2*np.pi * u.rad
-    
-    a = (14.437 * u.deg/u.day).to(u.rad/u.s); 
-    b = (-1.48 * u.deg/u.day).to(u.rad/u.s); 
-    c = (-2.99 * u.deg/u.day).to(u.rad/u.s); 
-    vrot = (a + b*np.sin(X[1]*u.deg)**2 + c*np.sin(X[1]*u.deg)**4)*np.cos(X[1]*u.deg)* hdr['RSUN_REF'] * u.m/u.rad
-    B0 = hdr['HGLT_OBS']*u.deg
-    THETA = (X[1])*u.deg # lat
-    PHI = (X[2]-hdr['HGLN_OBS'])*u.deg # lon
-    It = -np.cos(B0)*np.sin(PHI)*np.cos(thetarho) + \
-         (np.cos(PHI)*np.sin(psi)-np.sin(B0)*np.sin(PHI)*np.cos(psi))*np.sin(thetarho)
-    vlos = -(vrot) * It
-    
-    return vlos.value
-
-def SCVelocityResidual(hdr,wlcore):
-    # s/c velocity signal (considering line shift compensation)
-#     X = ccd2HGS(hdr)
-    HPCx, HPCy, HPCd = ccd2HPC(hdr)
-    thetarho = np.arctan(np.sqrt(np.cos(HPCy*u.arcsec)**2*np.sin(HPCx*u.arcsec)**2+np.sin(HPCy*u.arcsec)**2) / 
-                      (np.cos(HPCy*u.arcsec)*np.cos(HPCx*u.arcsec)))
-    psi = np.arctan(-(np.cos(HPCy*u.arcsec)*np.sin(HPCx*u.arcsec)) / np.sin(HPCy*u.arcsec))
-    psi[np.logical_and(HPCy>=0,HPCx<0)] += 0 * u.rad
-    psi[np.logical_and(HPCy<0,HPCx<0)] += np.pi * u.rad
-    psi[np.logical_and(HPCy<0,HPCx>=0)] += np.pi * u.rad
-    psi[np.logical_and(HPCy>=0,HPCx>=0)] += 2*np.pi * u.rad
-
-    vsc = hdr['OBS_VW']*np.sin(thetarho)*np.sin(psi) - hdr['OBS_VN']*np.sin(thetarho)*np.cos(psi) + hdr['OBS_VR']*np.cos(thetarho)
-    c = 299792.458
-    wlref = 6173.341
-    vsc_compensation = (wlcore-wlref)/wlref*c*1e3
-    
-    return vsc.value - vsc_compensation
-
-def meridionalFlow(hdr):
-    # from hathaway et al., 2011, values in m/s
-    # proper vlos projection without thetarho ~ 0 approximation from Schuck et al., 2016
-    X = ccd2HGS(hdr)
-    HPCx, HPCy, HPCd = ccd2HPC(hdr)
-    thetarho = np.arctan(np.sqrt(np.cos(HPCy*u.arcsec)**2*np.sin(HPCx*u.arcsec)**2+np.sin(HPCy*u.arcsec)**2) / 
-                      (np.cos(HPCy*u.arcsec)*np.cos(HPCx*u.arcsec)))
-    psi = np.arctan(-(np.cos(HPCy*u.arcsec)*np.sin(HPCx*u.arcsec)) / np.sin(HPCy*u.arcsec))
-    psi[np.logical_and(HPCy>=0,HPCx<0)] += 0 * u.rad
-    psi[np.logical_and(HPCy<0,HPCx<0)] += np.pi * u.rad
-    psi[np.logical_and(HPCy<0,HPCx>=0)] += np.pi * u.rad
-    psi[np.logical_and(HPCy>=0,HPCx>=0)] += 2*np.pi * u.rad
-    
-    d = 29.7 * u.m/u.s; e = -17.7 * u.m/u.s; 
-    vmer = (d*np.sin(X[1]*u.deg) + e*np.sin(X[1]*u.deg)**3)*np.cos(X[1]*u.deg)
-    B0 = hdr['HGLT_OBS']*u.deg
-    THETA = (X[1])*u.deg
-    PHI = (X[2]-hdr['HGLN_OBS'])*u.deg
-    It = (np.sin(B0)*np.cos(THETA) - np.cos(B0)*np.cos(PHI)*np.sin(THETA))*np.cos(thetarho) - \
-        (np.sin(PHI)*np.sin(THETA)*np.sin(psi) + \
-        (np.sin(B0)*np.cos(PHI)*np.sin(THETA) + np.cos(B0)*np.cos(THETA))*np.cos(psi))*np.sin(thetarho)
-    
-    vlos = (-vmer) * It
-    
-    return vlos.value
-
-def SCGravitationalRedshift(hdr):
-    # ok
-    # gravitational redshift (theoretical) from a distance dsun from the sun
-    dsun = hdr['DSUN_OBS'] # m
-    c = 299792.458e3 # m/s
-    Rsun = hdr['RSUN_REF'] # m
-    Msun = 1.9884099e30 # kg
-    G = 6.6743e-11 # m3/kg/s2
-    vg = G*Msun/c * (1/Rsun - 1/dsun)
-    
-    return vg
-
 def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True, TemperatureConstant = 40.1225e-3,prefilter_f=None,solar_rotation=True):
     """
     Cavity Map computation from flat field.
@@ -2229,15 +2555,17 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True, T
 #         a = 2.894e-6 * u.rad/u.s; b = -0.428e-6 * u.rad/u.s; c = -0.370e-6 * u.rad/u.s; 
 #         vrot = (a + b*np.sin(X[1]*u.deg)**2 + c*np.sin(X[1]*u.deg)**4)*np.cos(X[1]*u.deg)* 695700000. * u.m/u.rad
 #         vlos = (vrot)*np.sin((X[2]-hdr['HGLN_OBS'])*u.deg)*np.cos(hdr['CRLT_OBS']*u.deg)
+        # update on 2025-02-24: added convective Blueshift
         
         vrot = solarRotation(hdr)
         vmer = meridionalFlow(hdr)
         vgr = SCGravitationalRedshift(hdr)
         vsc = SCVelocityResidual(hdr,wlcore)
+        vcb = convectiveBlueshift(hdr)
 
         c = 299792.458
         wlref = 6173.341
-        wlvlos = ((vrot+vmer+vgr+vsc)*1e-3*wlref/c)
+        wlvlos = ((vrot+vmer+vgr+vsc+vcb)*1e-3*wlref/c)
 
         return wlvlos
 
@@ -2259,7 +2587,7 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True, T
     if prefilter_f is not None:
         print("Prefilter correction")
         prefilter = fits.getdata(prefilter_f)[:,::-1]
-        flat = prefilter_correction(flat.copy()[...,np.newaxis],[wl],prefilter,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)[...,0]
+        flat = prefilter_correction(flat.copy()[...,np.newaxis],[wl],prefilter,Tetalon=hh[0].header['FGOV1PT1'],TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)[...,0]
     
     CM = np.zeros((4,flat.shape[0],flat.shape[1]))
     for p in range(4):

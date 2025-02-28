@@ -1,12 +1,15 @@
 import numpy as np
 from astropy.io import fits
-from sophi_hrt_pipe.utils import *
-from sophi_hrt_pipe.processes import data_hdr_kw
+from .utils import printc, bcolors, ARmasking, cavity_shifts
+from .processes import data_hdr_kw
 import os
 import time
 import subprocess
 import datetime
 import milos as pym
+from .hrt_fdt_wcs_correction import run_FDT_correction
+from .hrt_fdt_wcs_correction import VERSION as wcs_version
+
 
 def create_output_filenames(filename, DID, version = '01',gzip = False):
     """Creating the L2 output filenames from the input file, which is assumed to be L1
@@ -64,7 +67,7 @@ def create_output_filenames(filename, DID, version = '01',gzip = False):
     return stokes_file, icnt_file, bmag_file, bazi_file, binc_file, blos_file, vlos_file, chi2_file,fullmodel_file
 
 
-def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan, hdr_scan, out_dir, out_rte_filename, vers):
+def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan, hdr_scan, out_dir, out_rte_filename, vers, wcs_update = False):
     """Write out the L2 files (excluding the Stokes parameters)
     
     Parameters
@@ -139,6 +142,23 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
     #blos
     print(blos_file)
     im = rte_data_products[2,:,:]*np.cos(rte_data_products[3,:,:]*np.pi/180.)
+
+    if wcs_update:
+        htemp = hdr_scan.copy()
+        htemp['FILENAME'] = blos_file
+        if wcs_update.lower() == 'fdt':
+            printc('-->>>>>>> Running FDT WCS correction on the BLOS file',bcolors.OKGREEN)
+            new_wcs = run_FDT_correction(im, htemp, False)
+        
+        for k,v in new_wcs.items():
+            if v[0] is not None:
+                hdr_scan[k] = v[0]
+                add_history = 'WCS updated by HRT pipeline using '+wcs_update.upper()+', S/W version: '+wcs_version+'. Check parent file for old WCS.'
+            else:
+                add_history = 'WCS not updated by HRT pipeline. Issue during the correction. S/W version: '+wcs_version
+        
+        hdr_scan['HISTORY'] = add_history
+
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = blos_file
         # hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
@@ -273,6 +293,14 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
         hdu_list[0].data = rte_data_products.astype(np.float32)
         hdu_list.writeto(out_dir+fullmodel_file, overwrite=True)
 
+    if wcs_update:
+        if os.path.isfile(out_dir+blos_file.replace('-blos','-stokes')):
+            print('Updating WCS keywords in the Stokes file!')
+            with fits.open(out_dir+blos_file.replace('-blos','-stokes'), mode='update') as hdu_list:
+                for k,v in new_wcs.items():
+                    if v[0] is not None: hdu_list[0].header[k] = v[0]
+                hdu_list[0].header['HISTORY'] = add_history
+
     if synthetic_stokes is not None:
         syn_file = blos_file.replace('-blos','-synt')
         print(syn_file)
@@ -291,7 +319,7 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
             hdu_list[0].data = synthetic_stokes.astype(np.float32)
             hdu_list.writeto(out_dir+syn_file, overwrite=True)
 
-def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_flipped, out_rte_filename, out_dir, cavity_f = None, rows = slice(0,2048), cols = slice(0,2048), vers = '01', out_synthesis = False, rte = "CE+RTE+PSF", pymilos = True, options = [], weight=np.asarray([1.,4.,5.4,4.1]), initial_model=np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]), parallel = False, num_workers = 20):
+def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_flipped, out_rte_filename, out_dir, cavity_f = None, rows = slice(0,2048), cols = slice(0,2048), vers = '01', out_synthesis = False, wcs_update = False, rte = "CE+RTE+PSF", pymilos = True, options = [], weight=np.asarray([1.,4.,5.4,4.1]), initial_model=np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]), parallel = False, num_workers = 20):
     """Pre-process each scan and call `run_pymilos` for each scan in the data set.
     
     Parameters
@@ -395,6 +423,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
         elif isinstance(weight,np.array):
             if weight.shape[0] == 2:
                 Nw = 2
+                list(weight)
         Nim = 1
         if isinstance(initial_model,list):
             if len(initial_model) == 2:
@@ -410,7 +439,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
                     temp_dir=out_dir,
                     cmd=cmd,
                     options=options,
-                    weight=weight,
+                    weight=np.asarray(weight),
                     mask=mask[:,:,scan],
                     initial_model=initial_model,
                     cavity=cavity,
@@ -428,7 +457,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
                     temp_dir=out_dir,
                     cmd=cmd,
                     options=options,
-                    weight=weight[0],
+                    weight=np.asarray(weight[0]),
                     mask=~ar_mask,
                     initial_model=initial_model[0],
                     cavity=cavity,
@@ -440,7 +469,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
                     temp_dir=out_dir,
                     cmd=cmd,
                     options=options,
-                    weight=weight[1],
+                    weight=np.asarray(weight[1]),
                     mask=ar_mask,
                     initial_model=initial_model[1],
                     cavity=cavity,
@@ -497,7 +526,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
             hdr_scan['RTE_ITER'] = options[1]
         # if cavity_f is not None:
         #     hdr_scan['CAL_CAVM'] = cavity_f
-        hdr_scan.set('RTE_W', str(weight), 'Polarimetric weights used in the RTE code', after='RTE_ITER')
+        hdr_scan.set('RTE_W', str(weight).replace('\n',','), 'Polarimetric weights used in the RTE code', after='RTE_ITER')
         hdr_scan.set('RTE_INIT', str(initial_model), 'Initial model used in the RTE code', after='RTE_ITER')
 
         if out_synthesis:
@@ -513,7 +542,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
         else:
             syn = None
 
-        write_output_inversion(rte_invs, syn, file_path, scan, hdr_scan, out_dir, out_rte_filename, vers)
+        write_output_inversion(rte_invs, syn, file_path, scan, hdr_scan, out_dir, out_rte_filename, vers, wcs_update)
         
         
 
