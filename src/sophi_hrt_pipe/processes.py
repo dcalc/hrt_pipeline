@@ -29,14 +29,14 @@ def setup_header(hdr_arr):
     'CAL_CRT0','CAL_CRT1','CAL_CRT2','CAL_CRT3','CAL_CRT4','CAL_CRT5',
     'CAL_CRT6','CAL_CRT7','CAL_CRT8','CAL_CRT9',
     'CAL_WREG','CAL_NORM','CAL_FRIN','CAL_PSF','CAL_ZER','CAL_IPOL',
-    'CAL_CAVM','CAL_SCIP','RTE_MOD','RTE_SW','RTE_ITER','VERS_CAL']
+    'CAL_CAVM','CAL_SCIP','RTE_MOD','RTE_SW','RTE_ITER','RTE_MU','VERS_CAL']
 
     v = [0,24,' ',' ','False',
     ' ','None ','None','NA',
     0,0,0,0,0,0,
     0,0,0,0,
     'None',' ','NA','NA','NA',' ',
-    'None','None',' ',' ',4294967295, hdr_arr[0]['VERS_SW'][1:4]]
+    'None','None',' ',' ',4294967295, 'False', hdr_arr[0]['VERS_SW'][1:4]]
 
     c = ['Onboard calibrated for gain table','Unsharp masking correction','Number of flat field frames used','Sigma for unsharp masking [px]','Wavelengths correction for FG temperature',
     'Prefilter correction (DID/file)','Ghost correction (name + version of module)',
@@ -44,7 +44,7 @@ def setup_header(hdr_arr):
     'cross-talk from I to Q (slope)','cross-talk from I to Q (offset)','cross-talk from I to U (slope)','cross-talk from I to U (offset)','cross-talk from I to V (slope)','cross-talk from I to V (offset)',
     'cross-talk from V to Q (slope)','cross-talk from V to Q (offset)','cross-talk from V to U (slope)','cross-talk from V to U (offset)','Wavelength Registration',
     'Normalization (normalization constant PROC_Ic)','Fringe correction (name + version of module)','PSF deconvolution','Zernike coefficients (rad)','Onboard calibrated for instrumental polarizatio',
-    'Cavity map used during inversion','Onboard scientific data analysis','Inversion mode','Inversion software','Number RTE inversion iterations', 'Version of calibration pack']
+    'Cavity map used during inversion','Onboard scientific data analysis','Inversion mode','Inversion software','Number RTE inversion iterations', 'MU dependence in RTE inversion', 'Version of calibration pack']
 
     for h in hdr_arr:
         for i in range(len(k)):
@@ -553,10 +553,10 @@ def flat_correction(data,flat,flat_states,cpos_arr,flat_pmp_temp=50,rows=slice(0
         printc("ERROR, Unable to apply flat fields",color=bcolors.FAIL)
 
 
-def prefilter_correctionNew(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_flipped = 'YES'):
+def prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_flipped = 'YES', prefilter_f = '/data/slam/oba/prefilter/'):
     """
-    New prefilter correction based on JH email on 2023-08-17
-    Based on on-ground measurements at Meudon
+    New prefilter correction based on TO email on 2025-02-26
+    Based on wavelength scans on 2024-07-10
 
     Parameters
     ----------
@@ -570,33 +570,80 @@ def prefilter_correctionNew(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_flip
         columns to be considered because of data cropping
     imgdirx_flipped: str
         check if data have been flipped (all the hrt-L1 data are flipped), DEFAULT = 'YES'
-
+    prefilter_f: str
+        directory where to find the prefilter files, DEFAULT = '/data/slam/oba/prefilter/'
+        
     Returns
     -------
     data: ndarray
         prefilter corrected data
     """
-    X,Y = np.meshgrid(np.arange(cols.start,cols.stop),np.arange(rows.start,rows.stop))
-    r = np.sqrt((X-934)**2 + (Y-1148)**2)
+    def _get_v1_index1(x):
+        # index1, v1 = min(enumerate([abs(i) for i in x]), key=itemgetter(1))
+        index1, v1 = min(enumerate(x), key = lambda i: abs(i[1]))
+        # return  x[index1], index1
+        return  v1, index1
+    
+    pf56_f = prefilter_f+'PF_transmittance_56deg_20240710_V20241213.fits'
+    pf61_f = prefilter_f+'PF_transmittance_61deg_20240710_V20241213.fits'
+    pf66_f = prefilter_f+'PF_transmittance_66deg_20240710_V20241213.fits'
 
-    CWL = -0.332253 - 4.81875e-05*r - 3.24533e-07*r**2 #  in AA, 0 is the line core of the Fe617 line (6173.343 AA)
-    FWHM = 2.59385 - 1.28984e-06*r - 7.38763e-09*r**2 # in AA
-    EXP = 3.65789 - 5.76046e-05*r - 3.52776e-08*r**2
-
-    xx = lambda wl: np.abs((wl[:,np.newaxis,np.newaxis]-CWL)*2/FWHM)  # in AA, lambda=0 is the Fe line core
-    profile = lambda wl:  1/(1+xx(wl)**(2*EXP)) # max. transmission set to be 1. everywhere
-
-    wlref = 6173.341
-
+    wl56_f = prefilter_f+'Wavelength_axis_PF_transmittance_56deg_20240710_V20241213.fits'
+    wl61_f = prefilter_f+'Wavelength_axis_PF_transmittance_61deg_20240710_V20241213.fits'
+    wl66_f = prefilter_f+'Wavelength_axis_PF_transmittance_66deg_20240710_V20241213.fits'
+    
+    if int(round(Tetalon)) == 56:
+        prefilter = fits.getdata(pf56_f) # (51,2048,2048)
+        prefilter_wave = fits.getdata(wl56_f) # (51,)
+    elif int(round(Tetalon)) == 61:
+        prefilter = fits.getdata(pf61_f) # (51,2048,2048)
+        prefilter_wave = fits.getdata(wl61_f) # (51,)
+    elif int(round(Tetalon)) == 66:
+        prefilter = fits.getdata(pf66_f) # (51,2048,2048)
+        prefilter_wave = fits.getdata(wl66_f) # (51,)
+    else:
+        printc(f'The Etalon temperature is not in [56,61,66], but it is {int(round(Tetalon))}. No Prefilter correction applied',bcolors.WARNING)
+        return data
+    
+    if imgdirx_flipped == 'NO':
+        printc('Flipping prefilter on the Y axis')
+        prefilter = prefilter[:,:,::-1]
+    
     for scan in range(data.shape[-1]):
-        # prefilter = profile(wave_axis_arr[scan]-wlref) # [wl,y,x]
-        # DC 20240612
-        prefilter = profile(wave_axis_arr[scan]-wlref-(Tetalon-66)*34.25e-3) # [wl,y,x] # Temperature shift of the prefilter by TO
-        prefilter = np.moveaxis(prefilter[...,np.newaxis],0,-1) # [y,x,1,wl]
-        if imgdirx_flipped == 'YES':
-            printc('Flipping prefilter on the Y axis')
-            prefilter = prefilter[:,::-1]
-        data[...,scan] /= prefilter
+        wave_list = wave_axis_arr[scan]
+        
+        for wv in range(len(wave_list)):
+
+            v = wave_list[wv]
+
+            vdif = [v - pf for pf in prefilter_wave]
+
+            v1, index1 = _get_v1_index1(vdif)
+            if v < prefilter_wave[-1] and v > prefilter_wave[0]:
+
+                if vdif[index1] >= 0:
+                    v2 = vdif[index1 + 1]
+                    index2 = index1 + 1
+
+                else:
+                    v2 = vdif[index1-1]
+                    index2 = index1 - 1
+
+                # imprefilter = (prefilter[:,:, index1]*(0-v1) + prefilter[:,:, index2]*(v2-0))/(v2-v1) #interpolation between nearest voltages
+
+            elif v >= prefilter_wave[-1]:
+                index2 = index1 - 1
+                v2 = vdif[index2]
+
+            elif v <= prefilter_wave[0]:
+                index2 = index1 + 1
+                v2 = vdif[index2]
+
+            imprefilter = (prefilter[index1,rows,cols]*v2 + prefilter[index2,rows,cols]*(-v1))/(v2-v1) #interpolation between nearest voltages
+
+            # imprefilter = (prefilter[:,:, index1]*v1 + prefilter[:,:, index2]*v2)/(v1+v2) #interpolation between nearest voltages
+
+            data[:,:,:,wv,scan] /= imprefilter[...,np.newaxis]
     return data
 
 def prefilter_correction(data,wave_axis_arr,prefilter,Tetalon=0,prefilter_voltages = None, TemperatureCorrection=True, TemperatureConstant = 40.1225e-3, shift = None):
@@ -1551,7 +1598,10 @@ def limb_side_finder(img, hdr,verbose=True):
     slx: slice
         slice in x direction to be used for normalisation
     """
-    Rpix=(hdr['RSUN_ARC']/hdr['CDELT1'])
+    try:
+        Rpix=(hdr['RSUN_ARC']/hdr['CDELT1'])
+    except:
+        Rpix=(hdr['RSUN_OBS']/hdr['CDELT1'])
     center = center_coord(hdr)[:2] - 1
     # limb_wcs = circular_mask(hdr['PXEND2']-hdr['PXBEG2']+1,
     #                          hdr['PXEND1']-hdr['PXBEG1']+1,center,Rpix)

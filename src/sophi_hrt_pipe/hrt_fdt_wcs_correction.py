@@ -271,7 +271,7 @@ def run_FDT_correction(data, header, verbose = False, **kwargs):
     else:
         filename = header['FILENAME']
         descriptor = get_descriptor(filename)
-        filename.replace(descriptor, 'blos')
+        filename = filename.replace(descriptor, 'blos')
         filename = [filename]
 
     newWCS = dict(DID=[], 
@@ -292,7 +292,7 @@ def run_FDT_correction(data, header, verbose = False, **kwargs):
             printc('No FDT file could be found for this HRT file, return None', color=bcolors.FAIL)
             for key in newWCS.keys():
                 newWCS[key].append(None)
-            pass
+            continue
 
         print("")
         print(f'Processing the file: {f}')

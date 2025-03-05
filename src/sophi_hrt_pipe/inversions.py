@@ -67,7 +67,7 @@ def create_output_filenames(filename, DID, version = '01',gzip = False):
     return stokes_file, icnt_file, bmag_file, bazi_file, binc_file, blos_file, vlos_file, chi2_file,fullmodel_file
 
 
-def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan, hdr_scan, out_dir, out_rte_filename, vers, wcs_update = False):
+def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan, hdr_scan, out_dir, out_rte_filename, vers, wcs_update = False, mu = None):
     """Write out the L2 files (excluding the Stokes parameters)
     
     Parameters
@@ -261,7 +261,10 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
 
     #Icnt
     print(icnt_file)
-    im = rte_data_products[9,:,:] + rte_data_products[10,:,:]
+    if mu is not None:
+        im = rte_data_products[9,:,:] + mu*rte_data_products[10,:,:]
+    else:
+        im = rte_data_products[9,:,:] + rte_data_products[10,:,:]
     with fits.open(file_path) as hdu_list:
         hdr_scan['FILENAME'] = icnt_file
         # hdr_scan['HISTORY'] = f"Vers: {version_k}. Dark: {dark_f_k}. Flat : {flat_f_k}, Unsharp: {clean_f_k}. I->QUV ctalk: {ItoQUV_k}. RTE: {rte_sw_k}. RTEmode: {rte_mod_k}."
@@ -319,7 +322,7 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
             hdu_list[0].data = synthetic_stokes.astype(np.float32)
             hdu_list.writeto(out_dir+syn_file, overwrite=True)
 
-def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_flipped, out_rte_filename, out_dir, cavity_f = None, rows = slice(0,2048), cols = slice(0,2048), vers = '01', out_synthesis = False, wcs_update = False, rte = "CE+RTE+PSF", pymilos = True, options = [], weight=np.asarray([1.,4.,5.4,4.1]), initial_model=np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]), parallel = False, num_workers = 20):
+def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_flipped, out_rte_filename, out_dir, cavity_f = None, mu = None, rows = slice(0,2048), cols = slice(0,2048), vers = '01', out_synthesis = False, wcs_update = False, rte = "CE+RTE+PSF", pymilos = True, options = [], weight=np.asarray([1.,4.,5.4,4.1]), initial_model=np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]), parallel = False, num_workers = 20):
     """Pre-process each scan and call `run_pymilos` for each scan in the data set.
     
     Parameters
@@ -397,6 +400,12 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
         else:
             cavity = np.empty([], dtype=float)
 
+        if mu is not None:
+            printc("  ---- >>>>> Mu angle as input: .... ",color=bcolors.OKGREEN)
+            assert mu.shape == data_shape[:2]
+        else:
+            mu = np.empty([], dtype=float)
+
         if cpos_arr[scan] == 0:
             shift_w =  wave_axis[3] - ref_wavelength
         elif cpos_arr[scan] == 5:
@@ -443,6 +452,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
                     mask=mask[:,:,scan],
                     initial_model=initial_model,
                     cavity=cavity,
+                    mu=mu,
                     parallel=parallel, num_workers=num_workers)
         else:
             if Nw == 1:
@@ -461,6 +471,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
                     mask=~ar_mask,
                     initial_model=initial_model[0],
                     cavity=cavity,
+                    mu=mu,
                     parallel=parallel, num_workers=num_workers)
 
             rte_invs1 = pym.phi_rte(sdata.copy(),
@@ -473,6 +484,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
                     mask=ar_mask,
                     initial_model=initial_model[1],
                     cavity=cavity,
+                    mu=mu,
                     parallel=parallel, num_workers=num_workers)
 
             rte_invs = rte_invs1*ar_mask+rte_invs0*(~ar_mask)
@@ -542,7 +554,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
         else:
             syn = None
 
-        write_output_inversion(rte_invs, syn, file_path, scan, hdr_scan, out_dir, out_rte_filename, vers, wcs_update)
+        write_output_inversion(rte_invs, syn, file_path, scan, hdr_scan, out_dir, out_rte_filename, vers, wcs_update, mu)
         
         
 
@@ -552,3 +564,113 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
         printc(f"------------- MILOS RTE Run Time: {np.round(time.perf_counter() - start_time,3)} seconds ",bcolors.OKGREEN)
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
 
+def cog(input_data,wave,wave_axis,lande_factor = 0,cpos = 0, verbose = False):
+    """
+    Calculates the velocity [and longitudinal field] of a profile or set of profiles using CoG technique.
+    From SO/PHI-FDT pipeline
+
+    input_data: the input data may have dimmensions of:
+
+        - [wave] = 1D the program assumes Stokes I profile (one profile) - returns Vlos
+
+        - [wave, Stokes] = 2D the program assumes Stokes I,Q,U,V [length 4] (one profile) - return Vlos + Blos
+
+        - [wave, X , Y] = 3D the program assumes Stokes I only in an X and Y image - return Vlos
+
+        - [wave, Stokes, X , Y] = 4D the program assumes Stokes I,Q,U,V in an X and Y image - return Vlos + Blos
+
+    :param input_data: fits file to load
+    :type input_data: str
+    :param wave: line central wavelength in Angstrom.
+    :type wave: float
+    :param wave_axis: wavelength axis in Angstrom.
+    :type wave_axis: float
+    :param lande_factor: Lange factor of the line. In case of Stokes parameters are given, the user has to provide the lande_factor of the transition.
+    :type lande_factor: float
+    :param cpos: position where the continuum of the line is located. Default is first position.
+    :type cpos: int
+    :param verbose: if True, return print statements
+    :type verbose: bool
+
+    :return: center of gravity velocity in km/s
+    :rtype: (np.ndarray,dict) or float
+
+    """
+    from scipy.integrate import simpson
+    # lande factor is 2.5 for Fe I 6173 line
+    
+    #check cpos
+    lpos = cpos if cpos != 0 else 0
+    # check dimensions of input
+    # posibilitis are:
+    ndim = input_data.ndim
+    if ndim == 1:
+        Ic = input_data[lpos]
+        t1 = wave_axis * ( Ic - input_data )
+        tc = ( Ic - input_data )
+        Itn = simpson(t1, x=wave_axis) / simpson(tc, x=wave_axis)
+        return -(wave - Itn ) * 2.99792458e+5 / wave
+    elif ndim == 2:
+        if verbose: print('Single Full Stokes profile')
+        if lande_factor==0:
+            print('Warning: lande factor is zero pelotero')
+        #check continuum position
+
+        Ic = input_data[lpos,0]
+        t1 = wave_axis * ( Ic - input_data[:,0] )
+        tc = ( Ic - input_data[:,0] )
+        Itn = simpson(t1, x=wave_axis) / simpson(tc, x=wave_axis)
+        vlos = -(wave - Itn ) * 2.99792458e+5 / wave
+
+        t_plus = input_data[:,0] + input_data[:,3]
+        t_minus = input_data[:,0] - input_data[:,3]
+        t1 = wave_axis * ( Ic - t_plus ) #Ic*0.5 ??
+        tc1 = Ic - t_plus
+        t2 = wave_axis * ( Ic - t_minus ) #Ic*0.5 ??
+        tc2 = Ic - t_minus
+        l_plus = simpson(t1, x=wave_axis) / simpson(tc1, x=wave_axis)
+        l_minus = simpson(t2, x=wave_axis) / simpson(tc2, x=wave_axis)
+        # blos = (l_plus - l_minus) / 2 / 4.67e-13 / (lande_factor * wave**2)
+        blos = (l_plus - l_minus) / (lande_factor * wave**2) * 1.0706639e+12 # Eqn 11.18 landi
+
+        return vlos,blos
+
+    elif ndim == 3:
+        l,sy,sx = input_data.shape
+        if verbose: print('Multiple Stokes I profiles [l,x,y]: ', l, sx, sy )
+        #check continuum position
+
+        Ic = input_data[lpos,:,:]
+        t1 = wave_axis[:,np.newaxis,np.newaxis] * ( Ic[np.newaxis,:,:] - input_data )
+        tc = ( Ic[np.newaxis,:,:] - input_data )
+        Itn = simpson(t1, x=wave_axis,axis=0) / simpson(tc, x=wave_axis,axis=0)
+        return -(wave - Itn ) * 2.99792458e+5 / wave
+    elif ndim == 4:
+        l,s,sy,sx = input_data.shape
+        if verbose: print('Multiple Full Stokes profiles [l,stokes,x,y]: ', l, s, sx, sy )
+        if lande_factor==0:
+            print('Warning: lande factor is zero pelotero')
+        #check continuum position
+
+        Ic = input_data[lpos,0,:,:]
+        t1 = wave_axis[:,np.newaxis,np.newaxis] * ( Ic[np.newaxis,:,:] - input_data[:,0,:,:] )
+        tc = ( Ic[np.newaxis,:,:] - input_data[:,0,:,:] )
+        Itn = simpson(t1, x=wave_axis,axis=0) / simpson(tc, x=wave_axis,axis=0)
+        vlos = -(wave - Itn ) * 2.99792458e+5 / wave
+
+        t_plus = input_data[:,0,:,:] + input_data[:,3,:,:]
+        t_minus = input_data[:,0,:,:] - input_data[:,3,:,:]
+        t1 = wave_axis[:,np.newaxis,np.newaxis] * ( Ic[np.newaxis,:,:] - t_plus ) #Ic*0.5 ??
+        tc1 = Ic[np.newaxis,:,:] - t_plus
+        t2 = wave_axis[:,np.newaxis,np.newaxis] * ( Ic[np.newaxis,:,:] - t_minus ) #Ic*0.5 ??
+        tc2 = Ic[np.newaxis,:,:] - t_minus
+        l_plus = simpson(t1, x=wave_axis,axis=0) / simpson(tc1, x=wave_axis,axis=0)
+        l_minus = simpson(t2, x=wave_axis,axis=0) / simpson(tc2, x=wave_axis,axis=0)
+        # blos = (l_plus - l_minus) / 2 / 4.67e-13/ (lande_factor * wave**2)
+        blos = (l_plus - l_minus) / (lande_factor * wave**2) * 1.0706639e+12 # Eqn 11.18 landi
+
+        return vlos,blos
+
+    else:
+        print('No input data or wrong dimentions',ndim)
+        return

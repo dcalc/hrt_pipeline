@@ -35,8 +35,10 @@ def mu_angle(hdr,coord=None):
         hdr = fits.getheader(hdr)
     
     center=center_coord(hdr)
-    Rpix=(hdr['RSUN_ARC']/hdr['CDELT1'])
-    
+    try:
+        Rpix=(hdr['RSUN_ARC']/hdr['CDELT1'])
+    except:
+        Rpix=(hdr['RSUN_OBS']/hdr['CDELT1'])
     if coord is None:
         coord = np.asarray([(hdr['PXEND1']-hdr['PXBEG1'])/2,
                             (hdr['PXEND2']-hdr['PXBEG2'])/2]) - center[:2]
@@ -72,11 +74,21 @@ def center_coord(hdr):
     crval2 = hdr['CRVAL2']
     crpix1 = hdr['CRPIX1']
     crpix2 = hdr['CRPIX2']
-    PC1_1 = hdr['PC1_1']
-    PC1_2 = hdr['PC1_2']
-    PC2_1 = hdr['PC2_1']
-    PC2_2 = hdr['PC2_2']
-        
+    if 'PC1_1' in hdr:
+        PC1_1 = hdr['PC1_1']
+        PC1_2 = hdr['PC1_2']
+        PC2_1 = hdr['PC2_1']
+        PC2_2 = hdr['PC2_2']
+    else:
+        if 'CROTA2' in hdr:
+            CROTA = hdr['CROTA2']
+        else:
+            CROTA = hdr['CROTA']
+        PC1_1 = np.cos(CROTA*np.pi/180)
+        PC1_2 = -np.sin(CROTA*np.pi/180)
+        PC2_1 = np.sin(CROTA*np.pi/180) 
+        PC2_2 = np.cos(CROTA*np.pi/180)
+    
     HPC1 = 0
     HPC2 = 0
     
@@ -336,7 +348,7 @@ def remap(ref_map, temp_map, out_shape = (1024,1024), verbose = False):
         # reprojection
         temp_origin = temp_map
         output, footprint = reproject_adaptive(temp_origin, out_wcs, out_shape,kernel='Hann',boundary_mode='ignore')
-        temp_map = sunpy.map.Map(output, out_header)
+        temp_map = sunpy.map.Map((output, out_header))
     temp_map.plot_settings = temp_origin.plot_settings
 
     # plot reprojected maps

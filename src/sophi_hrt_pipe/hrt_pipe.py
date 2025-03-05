@@ -12,7 +12,10 @@ from .utils import printc, bcolors, get_data, fits_get_sampling, check_size, che
 
 from .processes import setup_header, apply_dark_correction, load_and_process_flat, prefilter_correction, normalise_flat, unsharp_masking, flat_correction, apply_field_stop, hot_pixel_mask, load_ghost_field_stop, polarimetric_registration, wavelength_registration, demod_hrt, crosstalk_2D_ItoQUV, crosstalk_auto_VtoQU, CT_VtoQU, write_out_intermediate, data_hdr_kw, limb_ellipse
 
-from .inversions import generate_l2, create_output_filenames
+from .inversions import generate_l2, create_output_filenames, cog
+from .coordinates import muSO_map
+from .hrt_fdt_wcs_correction import run_FDT_correction
+from .hrt_fdt_wcs_correction import VERSION as wcs_version
 
 from .PSF import fran_restore
 
@@ -204,6 +207,7 @@ def phihrt_pipe(input_json_file):
         out_unreconstructed = input_dict.pop('out_unreconstructed', False)
 
         wcs_update = input_dict.pop('wcs_update', False)
+        mu_correction = input_dict.pop('mu_correction', False)
 
         # pymilos_opt = input_dict['pymilos']
         
@@ -1167,6 +1171,27 @@ def phihrt_pipe(input_json_file):
         PQm = PUm = PVm = 0
 
     #-----------------
+    # WCS UPDATE
+    #-----------------
+    if wcs_update:
+        for scan in range(data_shape[-1]):
+            htemp = hdr_arr[scan].copy()
+            # htemp['FILENAME'] = blos_file
+            _, im = cog(np.moveaxis(data[...,scan].copy(), [-1,-2], [0,1]),wave_axis_arr[scan][cpos_arr[scan]-3],wave_axis_arr[scan], 2.5, cpos_arr[scan])
+            if wcs_update.lower() == 'fdt':
+                printc('-->>>>>>> Running FDT WCS correction on the BLOS file',bcolors.OKGREEN)
+                new_wcs = run_FDT_correction(im, htemp, False)
+            
+            for k,v in new_wcs.items():
+                if v[0] is not None:
+                    hdr_arr[scan][k] = v[0]
+                    add_history = 'WCS updated by HRT pipeline using '+wcs_update.upper()+', S/W version: '+wcs_version+'. Check parent file for old WCS.'
+                else:
+                    add_history = 'WCS not updated by HRT pipeline. Issue during the correction. S/W version: '+wcs_version
+            
+            hdr_arr[scan]['HISTORY'] = add_history
+
+    #-----------------
     # WRITE OUT STOKES VECTOR
     #-----------------
 
@@ -1420,10 +1445,17 @@ def phihrt_pipe(input_json_file):
         # else:
         #     RTE_code = 'cmilos'
         # options = []
-
+        mu = np.ones((data.shape[0],data.shape[1]))
+        if mu_correction:
+            printc('-->>>>>>> Mu angle dependence in the RTE inversion',bcolors.WARNING)
+            mu = muSO_map(hdr_arr[0],mu.shape)
+            mu = np.nan_to_num(mu,True,0,0,0)
+            for hdr in hdr_arr:
+                hdr['RTE_MU'] = 'True'
+                
         generate_l2(data_f, hdr_arr, wave_axis_arr, cpos_arr, 
                     data, mask, imgdirx_flipped, out_rte_filename, out_dir, 
-                    cavity, rows, cols, vrs, out_synthesis, wcs_update,
+                    cavity, mu, rows, cols, vrs, out_synthesis, False,
                     **RTE_options)
                     
         # if pymilos_opt:
