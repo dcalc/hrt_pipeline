@@ -10,7 +10,7 @@ from scipy.ndimage import binary_dilation, binary_erosion, generate_binary_struc
 
 from .utils import printc, bcolors, get_data, fits_get_sampling, check_size, check_cpos, check_pmp_temp, stokes_reshape, compare_IMGDIRX, compare_cpos, load_fits, cavity_shifts, ARmasking, check_IMGDIRX, check_filenames
 
-from .processes import setup_header, apply_dark_correction, load_and_process_flat, prefilter_correction, normalise_flat, unsharp_masking, flat_correction, apply_field_stop, hot_pixel_mask, load_ghost_field_stop, polarimetric_registration, wavelength_registration, demod_hrt, crosstalk_2D_ItoQUV, crosstalk_auto_VtoQU, CT_VtoQU, write_out_intermediate, data_hdr_kw, limb_ellipse
+from .processes import setup_header, apply_dark_correction, load_and_process_flat, prefilter_correction_WLS, normalise_flat, unsharp_masking, flat_correction, apply_field_stop, hot_pixel_mask, load_ghost_field_stop, polarimetric_registration, wavelength_registration, demod_hrt, crosstalk_2D_ItoQUV, crosstalk_auto_VtoQU, CT_VtoQU, write_out_intermediate, data_hdr_kw, limb_ellipse
 
 from .inversions import generate_l2, create_output_filenames, cog
 from .coordinates import muSO_map
@@ -561,32 +561,15 @@ def phihrt_pipe(input_json_file):
         prefilter_c = True
         start_time = time.perf_counter()
 
-        prefilter, _ = load_fits(prefilter_f)
-        if imgdirx_flipped == 'YES':
-            print('Flipping prefilter on the Y axis')
-            prefilter = prefilter[:,::-1]
-        # prefilter = prefilter[rows,cols]
         
         if flat_c:
             wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)
             wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0])
-            Tetalon_flat = header_flat['FGOV1PT1'] # ['FGH_TSP1']
-            flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],prefilter,Tetalon=Tetalon_flat,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity)[...,0]
-            # flat = prefilter_correctionNew(flat[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),Tetalon=Tetalon_flat,imgdirx_flipped = 'YES')[...,0]
-        
-        # for hdr in hdr_arr:
-        #     hdr['CAL_PRE'] = prefilter_f
-        
-        # if out_intermediate:
-        #     data_PFc = data.copy()  # DC 20211116
-
-        # printc('--------------------------------------------------------------',bcolors.OKGREEN)
-        # printc(f"------------- Prefilter correction time: {np.round(time.perf_counter() - start_time,3)} seconds",bcolors.OKGREEN)
-        # printc('--------------------------------------------------------------',bcolors.OKGREEN)
-
+            Tetalon_flat = header_flat['FGOV1PT1']
+            flat = prefilter_correction_WLS(flat[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),Tetalon=Tetalon_flat)[...,0]
+            
     else:
         print(" ")
-        # printc('-->>>>>>> No prefilter mode',color=bcolors.WARNING)
         prefilter_c = False
 
     #-----------------
@@ -672,24 +655,7 @@ def phihrt_pipe(input_json_file):
         start_time = time.perf_counter()
         Tetalon = hdr_arr[0]['FGOV1PT1'] # ['FGH_TSP1']
             
-        # data = prefilter_correction(data,wave_axis_arr,rows,cols,imgdirx_flipped)
-
-        # prefilter, _ = load_fits(prefilter_f)
-        # if imgdirx_flipped == 'YES':
-        #     print('Flipping prefilter on the Y axis')
-        #     prefilter = prefilter[:,::-1]
-        # prefilter = prefilter[rows,cols]
-        
-        if cavity is not None:
-            data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],Tetalon=Tetalon,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity[rows,cols])
-        else:
-            data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],Tetalon=Tetalon,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=None)
-            # data = prefilter_correctionNew(data,wave_axis_arr,rows,cols,Tetalon=Tetalon,imgdirx_flipped = 'YES')
-        # DC 20221109 test for Smitha. PF already removed from the flat
-        # wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True)
-        # wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0]) 
-        # flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],prefilter,TemperatureCorrection=TemperatureCorrection)[...,0]
-        # flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),imgdirx_flipped)[...,0]
+        data = prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=Tetalon)
         
         for hdr in hdr_arr:
             hdr['CAL_PRE'] = prefilter_f
@@ -1445,10 +1411,10 @@ def phihrt_pipe(input_json_file):
         # else:
         #     RTE_code = 'cmilos'
         # options = []
-        mu = np.ones((data.shape[0],data.shape[1]))
+        mu = None
         if mu_correction:
             printc('-->>>>>>> Mu angle dependence in the RTE inversion',bcolors.WARNING)
-            mu = muSO_map(hdr_arr[0],mu.shape)
+            mu = muSO_map(hdr_arr[0],(data.shape[0],data.shape[1]))
             mu = np.nan_to_num(mu,True,0,0,0)
             for hdr in hdr_arr:
                 hdr['RTE_MU'] = 'True'

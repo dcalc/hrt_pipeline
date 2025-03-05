@@ -321,12 +321,12 @@ def plot_l2_pdf(path,did,version=None,save_output=True,plot_noise=True,plot_stok
 
 
         ax.plot(xx,gaus(xx,*pp),'r--', label=lbl)
-        try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,10.],eps=1e-4); p_iter[0] = pp[0]
-            ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
-            # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
-        except:
-            print("Iterative Gauss Fit failed")
+        # try:
+        #     p_iter, hi_iter = iter_noise(values,[1.,0.,10.],eps=1e-4); p_iter[0] = pp[0]
+        #     ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
+        #     # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
+        # except:
+        #     print("Iterative Gauss Fit failed")
         ax.set_aspect('auto')
         ax.legend()
         ax.set_title(f"LoS magnetic field NSR")
@@ -347,12 +347,12 @@ def plot_l2_pdf(path,did,version=None,save_output=True,plot_noise=True,plot_stok
 
 
         ax.plot(xx,gaus(xx,*pp),'r--', label=lbl)
-        try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,1000.],eps=1e-4); p_iter[0] = pp[0]
-            ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
-            # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
-        except:
-            print("Iterative Gauss Fit failed")
+        # try:
+        #     p_iter, hi_iter = iter_noise(values,[1.,0.,1000.],eps=1e-4); p_iter[0] = pp[0]
+        #     ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
+        #     # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
+        # except:
+        #     print("Iterative Gauss Fit failed")
         ax.set_aspect('auto')
         ax.legend()
         ax.set_title(f"Transverse magnetic field NSR")
@@ -373,12 +373,12 @@ def plot_l2_pdf(path,did,version=None,save_output=True,plot_noise=True,plot_stok
 
 
         ax.plot(xx,gaus(xx,*pp),'r--', label=lbl)
-        try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = pp[0]
-            ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
-            # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
-        except:
-            print("Iterative Gauss Fit failed")
+        # try:
+        #     p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = pp[0]
+        #     ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
+        #     # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
+        # except:
+        #     print("Iterative Gauss Fit failed")
         ax.set_aspect('auto')
         ax.legend()
         ax.set_title(f"Stokes Q NSR")
@@ -399,12 +399,12 @@ def plot_l2_pdf(path,did,version=None,save_output=True,plot_noise=True,plot_stok
 
 
         ax.plot(xx,gaus(xx,*pp),'r--', label=lbl)
-        try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = pp[0]
-            ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
-            # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
-        except:
-            print("Iterative Gauss Fit failed")
+        # try:
+        #     p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = pp[0]
+        #     ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
+        #     # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
+        # except:
+        #     print("Iterative Gauss Fit failed")
         ax.set_aspect('auto')
         ax.legend()
         ax.set_title(f"Stokes U NSR")
@@ -425,12 +425,12 @@ def plot_l2_pdf(path,did,version=None,save_output=True,plot_noise=True,plot_stok
 
 
         ax.plot(xx,gaus(xx,*pp),'r--', label=lbl)
-        try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = pp[0]
-            ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
-            # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
-        except:
-            print("Iterative Gauss Fit failed")
+        # try:
+        #     p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = pp[0]
+        #     ax.plot(xx,gaus(xx,*p_iter),'g-.', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
+        #     # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
+        # except:
+        #     print("Iterative Gauss Fit failed")
         ax.set_aspect('auto')
         ax.legend()
         ax.set_title(f"Stokes V NSR")

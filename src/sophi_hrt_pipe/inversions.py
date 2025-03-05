@@ -1,6 +1,6 @@
 import numpy as np
 from astropy.io import fits
-from .utils import printc, bcolors, ARmasking, cavity_shifts
+from .utils import printc, bcolors, ARmasking, cavity_shifts, gaussian_fit
 from .processes import data_hdr_kw
 import os
 import time
@@ -425,14 +425,6 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
         
         # possibility to give two weights and/or initial_model
         # first one for AR, second one for QS
-        Nw = 1
-        if isinstance(weight,list):
-            if len(weight) == 2:
-                Nw = 2
-        elif isinstance(weight,np.array):
-            if weight.shape[0] == 2:
-                Nw = 2
-                list(weight)
         Nim = 1
         if isinstance(initial_model,list):
             if len(initial_model) == 2:
@@ -440,6 +432,33 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
         elif isinstance(initial_model,np.array):
             if initial_model.shape[0] == 2:
                 Nim = 2
+        
+        ar_mask = ARmasking(sdata, mask[:,:,scan], cpos=cpos_arr[scan], dilation_iter=5)
+        if weight == 'auto' or isinstance(weight,str):
+            if Nim == 2:
+                weight = np.asarray([[1,0,0,0],[1,0,0,0]])
+            else:
+                weight = np.asarray([1,0,0,0])
+            for i in range(1,4):
+                hi = np.histogram(sdata[cpos_arr[scan],i,ar_mask>0],np.linspace(-1e-2,1e-2,200))
+                if Nim == 2:
+                    weight[0][i] = round(gaussian_fit(hi,False)[2]*2.5e3,2)
+                    if i != 3:
+                        weight[1][i] = weight[0][i]*2
+                    else:
+                        weight[1][i] = weight[0][i]
+                else:
+                    weight[i] = round(gaussian_fit(hi,False)[2]*2.5e3,2)
+        else:
+            Nw = 1
+            if isinstance(weight,list):
+                if len(weight) == 2:
+                    Nw = 2
+            elif isinstance(weight,np.array):
+                if weight.shape[0] == 2:
+                    Nw = 2
+                    list(weight)
+        
         
         if Nw == 1 and Nim ==1:
             rte_invs = pym.phi_rte(sdata.copy(),
@@ -460,7 +479,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
             if Nim == 1:
                 initial_model = [initial_model,initial_model]
             # make AR mask
-            ar_mask = ARmasking(sdata, mask[:,:,scan], cpos=cpos_arr[scan], dilation_iter=5)
+            # AR
             rte_invs0 = pym.phi_rte(sdata.copy(),
                     wave_axis,
                     rte_mode=rte,
@@ -474,6 +493,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
                     mu=mu,
                     parallel=parallel, num_workers=num_workers)
 
+            # QS
             rte_invs1 = pym.phi_rte(sdata.copy(),
                     wave_axis,
                     rte_mode=rte,
