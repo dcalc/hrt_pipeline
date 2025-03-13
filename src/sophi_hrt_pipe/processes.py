@@ -1980,17 +1980,15 @@ def limb_ellipse(img, hdr, field_stop, AR_mask, verbose=True, percent=False, fit
     return output
     ######
 
-def crosstalk_auto_VtoQU(data_demod,cpos,wl,roi=np.ones((2048,2048)),verbose=0,npoints=5000,nlevel=0.3):
+def crosstalk_auto_VtoQU(data_demod,wl,roi=np.ones((2048,2048)),verbose=0,npoints=5000,nlevel=0.3):
     """Get crosstalk coefficients for V to Q,
 
     Parameters
     ----------
     data_demod: ndarray
         input data that has been demodulated
-    cpos: int
-        continuum position
     wl: int
-        wavelength position
+        wavelengths position
     roi: ndarray
         region of interest
     verbose: bool/int
@@ -2014,9 +2012,8 @@ def crosstalk_auto_VtoQU(data_demod,cpos,wl,roi=np.ones((2048,2048)),verbose=0,n
     my = []
     sy = []
     
-    x = data_demod[roi>0,3,cpos].flatten()
-    lx = data_demod[roi>0,0,cpos].flatten()
-    lv = np.abs(data_demod[roi>0,3,cpos]).flatten()
+    x = data_demod[roi>0,3,wl].flatten()
+    lv = np.abs(data_demod[roi>0,3,wl]).flatten()
     
     ids = (lv > nlevel/100.)
     x = x[ids].flatten()
@@ -2065,7 +2062,7 @@ def crosstalk_auto_VtoQU(data_demod,cpos,wl,roi=np.ones((2048,2048)),verbose=0,n
 
         print('Cross-talk from V to Q: slope = {: {width}.{prec}f} ; off-set = {: {width}.{prec}f} '.format(cQ[0],cQ[1],width=8,prec=4))
         print('Cross-talk from V to U: slope = {: {width}.{prec}f} ; off-set = {: {width}.{prec}f} '.format(cU[0],cU[1],width=8,prec=4))
-    
+        plt.show()
 #         return cQ,cU,cV, (idx,x,xp,yQ,yU,yV,pQ,pU,pV,mx,sx,my,sy)
     else:
         printc('Cross-talk from V to Q: slope = {: {width}.{prec}f} ; off-set = {: {width}.{prec}f} '.format(cQ[0],cQ[1],width=8,prec=4),color=bcolors.OKGREEN)
@@ -2108,7 +2105,7 @@ def CT_VtoQU(data, ctalk_params):
     return data
 
 
-def polarimetric_registration(data, sly, slx, hdr_arr):
+def polarimetric_registration(data, sly, slx, hdr_arr, derivative=True):
     """Align the mod (pol) states 2,3,4 with state 1 for a given wavelength
     loop through all wavelengths
 
@@ -2122,7 +2119,8 @@ def polarimetric_registration(data, sly, slx, hdr_arr):
         slice in x direction
     hdr_arr: ndarray
         header array
-    
+    derivative: bool
+        if True, the spatial derivative of the images is used in the correlation
     Returns
     -------
     data: ndarray
@@ -2147,8 +2145,12 @@ def polarimetric_registration(data, sly, slx, hdr_arr):
             if j%pn == 0:
                 pass
             else:
-                ref = image_derivative(old_data[:,:,0,j//pn,scan])[sly,slx]
-                temp = image_derivative(old_data[:,:,j%pn,j//pn,scan])[sly,slx]
+                if derivative:
+                    ref = image_derivative(old_data[:,:,0,j//pn,scan])[sly,slx]
+                    temp = image_derivative(old_data[:,:,j%pn,j//pn,scan])[sly,slx]
+                else:
+                    ref = old_data[sly,slx,0,j//pn,scan]
+                    temp = old_data[sly,slx,j%pn,j//pn,scan]
                 it = 0
                 s = [1,1]
                 
@@ -2157,8 +2159,10 @@ def polarimetric_registration(data, sly, slx, hdr_arr):
                     s = [sr[1],sc[1]]
                     shift_raw[:,j] = [shift_raw[0,j]+s[0],shift_raw[1,j]+s[1]]
                     
-                    temp = image_derivative(fft_shift(old_data[:,:,j%pn,j//pn,scan], shift_raw[:,j]))[sly,slx]
-
+                    if derivative:
+                        temp = image_derivative(fft_shift(old_data[:,:,j%pn,j//pn,scan], shift_raw[:,j]))[sly,slx]
+                    else:
+                        temp = fft_shift(old_data[:,:,j%pn,j//pn,scan], shift_raw[:,j])[sly,slx]
                     it += 1
                     if it ==10:
                         break
@@ -2212,6 +2216,8 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr, derivative = True
     else:
         l_i =    [1,2,4,5,3] # shift wl
         refl_i = [0,1,2,0,4]
+        # l_i =    [1,2,3,4,5] # shift wl
+        # refl_i = [0,1,2,3,4]
         cwl = 3
     
     new_data = data.copy()
@@ -2225,14 +2231,15 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr, derivative = True
 
     for scan in range(data_shape[-1]):
         shift_stk = np.zeros((2,wln-1))
-        if deconv != False:
-            from sophi_hrt_pipe.PSF import fran_restore
-            dat = data[sly.start-5:sly.stop+5,slx.start-5:slx.stop+5,:,:,scan].copy()
-            # old_data, _ = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']),
-            #                             mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0.02, low_f=0.8, aberr_cor=False)
-            old_data, _, _ = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), sly=slice(0,dat.shape[0]), slx=slice(0,dat.shape[1]),
-                                        mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0, low_f=0.1, aberr_cor=False, PD_f=deconv['PD_f'], straylight_corr=deconv['straylight_correction'])
-            sly, slx = slice(5,sly.stop-sly.start+5), slice(5,slx.stop-slx.start+5)
+        if deconv != False and isinstance(deconv, dict):
+            if deconv['deconvolution']:
+                from sophi_hrt_pipe.PSF import fran_restore
+                dat = data[sly.start-5:sly.stop+5,slx.start-5:slx.stop+5,:,:,scan].copy()
+                # old_data, _ = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']),
+                #                             mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0.02, low_f=0.8, aberr_cor=False)
+                old_data, _, _ = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), sly=slice(0,dat.shape[0]), slx=slice(0,dat.shape[1]),
+                                            mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0, low_f=0.1, aberr_cor=False, PD_f=deconv['PD_f'], straylight_corr=deconv['straylight_correction'])
+                sly, slx = slice(5,sly.stop-sly.start+5), slice(5,slx.stop-slx.start+5)
         else:
             old_data = data[...,scan].copy()
 
@@ -2261,7 +2268,7 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr, derivative = True
                 Mtrans = np.float32([[1,0,shift_stk[1,i]],[0,1,shift_stk[0,i]]])
                 new_data[:,:,ss,l,scan]  = cv2.warpAffine(data[:,:,ss,l,scan].copy().astype(np.float32), Mtrans, data_size[::-1], flags=cv2.INTER_LANCZOS4)
             
-            old_data[:,:,ss,l]  = cv2.warpAffine(old_data[:,:,0,l].copy().astype(np.float32), Mtrans, (old_data.shape[0],old_data.shape[1]), flags=cv2.INTER_LANCZOS4)
+            old_data[:,:,0,l]  = cv2.warpAffine(old_data[:,:,0,l].copy().astype(np.float32), Mtrans, (old_data.shape[0],old_data.shape[1]), flags=cv2.INTER_LANCZOS4)
 
             # if l == cwl:
             #     ref = image_derivative(old_data[:,:,0,cpos_arr[0],scan])[sly,slx]

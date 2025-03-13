@@ -261,7 +261,7 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
 
     #Icnt
     print(icnt_file)
-    if mu is not None:
+    if mu is not None and mu.ndim != 0:
         im = rte_data_products[9,:,:] + mu*rte_data_products[10,:,:]
     else:
         im = rte_data_products[9,:,:] + rte_data_products[10,:,:]
@@ -436,9 +436,11 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
         ar_mask = ARmasking(sdata, mask[:,:,scan], cpos=cpos_arr[scan], dilation_iter=5)
         if weight == 'auto' or isinstance(weight,str):
             if Nim == 2:
-                weight = np.asarray([[1,0,0,0],[1,0,0,0]])
+                Nw = 2
+                weight = np.asarray([[1,0,0,0],[1,0,0,0]], dtype='float')
             else:
-                weight = np.asarray([1,0,0,0])
+                Nw = 1
+                weight = np.asarray([1,0,0,0], dtype='float')
             for i in range(1,4):
                 hi = np.histogram(sdata[cpos_arr[scan],i,ar_mask>0],np.linspace(-1e-2,1e-2,200))
                 if Nim == 2:

@@ -566,7 +566,7 @@ def phihrt_pipe(input_json_file):
             wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)
             wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0])
             Tetalon_flat = header_flat['FGOV1PT1']
-            flat = prefilter_correction_WLS(flat[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),Tetalon=Tetalon_flat)[...,0]
+            flat = prefilter_correction_WLS(flat[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),Tetalon=Tetalon_flat, prefilter_f=prefilter_f)[...,0]
             
     else:
         print(" ")
@@ -654,8 +654,8 @@ def phihrt_pipe(input_json_file):
         # prefilter_c = True
         start_time = time.perf_counter()
         Tetalon = hdr_arr[0]['FGOV1PT1'] # ['FGH_TSP1']
-            
-        data = prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=Tetalon)
+        
+        data = prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=Tetalon, prefilter_f=prefilter_f)
         
         for hdr in hdr_arr:
             hdr['CAL_PRE'] = prefilter_f
@@ -912,8 +912,8 @@ def phihrt_pipe(input_json_file):
             scan_hdr['CAL_CRT0'] = round(np.mean(cQ[0]),4) #I-Q slope
             scan_hdr['CAL_CRT2'] = round(np.mean(cU[0]),4) #I-U slope
             scan_hdr['CAL_CRT4'] = round(np.mean(cV[0]),4) #I-V slope
-            scan_hdr['CAL_CRT3'] = round(np.mean(cQ[1]),4) #I-U offset
-            scan_hdr['CAL_CRT1'] = round(np.mean(cU[1]),4) #I-Q offset
+            scan_hdr['CAL_CRT1'] = round(np.mean(cQ[1]),4) #I-Q offset
+            scan_hdr['CAL_CRT3'] = round(np.mean(cU[1]),4) #I-U offset
             scan_hdr['CAL_CRT5'] = round(np.mean(cV[1]),4) #I-V offset
             
             if CTmode == 'surface':
@@ -952,14 +952,20 @@ def phihrt_pipe(input_json_file):
         CTparams = np.zeros((2,2,number_of_scans))
         
         for scan, scan_hdr in enumerate(hdr_arr):
-            printc(f'  ---- >>>>> CT parameters computation of data scan number: {scan} .... ',color=bcolors.OKGREEN)
-            if ghost_c:
-                ctalk_params = crosstalk_auto_VtoQU(data[...,scan],slice(0,data.shape[3]),slice(0,data.shape[3]),roi=np.asarray(field_stop[rows,cols]*field_stop_ghost[rows,cols],dtype=bool),nlevel=0.3)
+            if isinstance(VtoQU, bool):
+                printc(f'  ---- >>>>> CT parameters computation of data scan number: {scan} .... ',color=bcolors.OKGREEN)
+                if ghost_c:
+                    ctalk_params = crosstalk_auto_VtoQU(data[...,scan],slice(0,data.shape[3]),roi=np.asarray(limb_percent_mask[...,scan]*field_stop_ghost[rows,cols],dtype=bool),nlevel=0.3)
+                else:
+                    ctalk_params = crosstalk_auto_VtoQU(data[...,scan],slice(0,data.shape[3]),roi=limb_percent_mask[...,scan],nlevel=0.3)
             else:
-                ctalk_params = crosstalk_auto_VtoQU(data[...,scan],slice(0,data.shape[3]),slice(0,data.shape[3]),roi=field_stop[rows,cols],nlevel=0.3)
+                printc(f'  ---- >>>>> CT parameters given as input ',color=bcolors.WARNING)
+                printc('Cross-talk from V to Q: slope = {: {width}.{prec}f} ; off-set = {: {width}.{prec}f} '.format(VtoQU[0],VtoQU[1],width=8,prec=4),color=bcolors.WARNING)
+                printc('Cross-talk from V to U: slope = {: {width}.{prec}f} ; off-set = {: {width}.{prec}f} '.format(VtoQU[2],VtoQU[3],width=8,prec=4),color=bcolors.WARNING)
+                ctalk_params = np.asarray(VtoQU).reshape((2,2), order='F') # expecting [Qslope, Qoffset, Uslope, Uoffset]
             
             CTparams[...,scan] = ctalk_params
-            #wrong keywords for CT parameters: fixed on 2022-10-07
+
             scan_hdr['CAL_CRT6'] = round(ctalk_params[slope,q],4) #V-Q slope
             scan_hdr['CAL_CRT8'] = round(ctalk_params[slope,u],4) #V-U slope
             scan_hdr['CAL_CRT7'] = round(ctalk_params[offset,q],4) #V-Q offset
@@ -971,8 +977,8 @@ def phihrt_pipe(input_json_file):
         printc(f"------------- V -> Q,U cross talk correction time: {np.round(time.perf_counter() - start_time,3)} seconds ",bcolors.OKGREEN)
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
     
-    if (not iss_off or not PSFstokes['deconvolution']) and fs_c:
-        data *= field_stop[rows,cols, np.newaxis, np.newaxis, np.newaxis]
+        if (not iss_off or not PSFstokes['deconvolution']) and fs_c:
+            data *= field_stop[rows,cols, np.newaxis, np.newaxis, np.newaxis]
 
     else:
         print(" ")
@@ -1146,7 +1152,7 @@ def phihrt_pipe(input_json_file):
             _, im = cog(np.moveaxis(data[...,scan].copy(), [-1,-2], [0,1]),wave_axis_arr[scan][cpos_arr[scan]-3],wave_axis_arr[scan], 2.5, cpos_arr[scan])
             if wcs_update.lower() == 'fdt':
                 printc('-->>>>>>> Running FDT WCS correction on the BLOS file',bcolors.OKGREEN)
-                new_wcs = run_FDT_correction(im, htemp, False)
+                new_wcs = run_FDT_correction(im*limb_mask[...,scan], htemp, False)
             
             for k,v in new_wcs.items():
                 if v[0] is not None:

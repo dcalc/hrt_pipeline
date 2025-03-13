@@ -25,38 +25,52 @@ def get_descriptor(filename, telescope='hrt'):
 def closestFDT(filename):
     # hdr = fits.open(filename)
     # btype = hdr[0].header['BTYPE']
-
+    LL_dates_corrupted = ['2024-03-17',
+                          '2024-03-21',
+                          '2024-03-24',
+                          '2024-03-25']
+    
     descriptor = get_descriptor(filename)
 
     date_obs = DT.strptime(filename.split('_')[-3], '%Y%m%dT%H%M%S')
 
-    t0 = date_obs - TD(days=1)
-    dates = [(t0+TD(days=i)).strftime('%Y-%m-%d') for i in range(3)]
+    MAX_DAYS = 3
+    delta_days = 1
+    while delta_days <= MAX_DAYS:
+        t0 = date_obs - TD(days=delta_days)
+        dates = [(t0+TD(days=i)).strftime('%Y-%m-%d') for i in range(3)]
 
-    fdt_files = []
-    for d in dates:
-        fdt_files += sorted(glob.glob(f'/data/solo/phi/data/fmdb/public/l2/{d}/*phi-fdt-{descriptor}*.fits.gz'))
+        fdt_files = []
+        for d in dates:
+            fdt_files += sorted(glob.glob(f'/data/solo/phi/data/fmdb/public/l2/{d}/*phi-fdt-{descriptor}*.fits.gz'))
 
-    if len(fdt_files) == 0:
-        print(f'No FDT L2 {descriptor} file, looking for NRT')
-        for d in dates:
-            fdt_files += sorted(glob.glob(f'/scratch/valori/nrt_fmdb/l2/{d}/*phi-fdt-{descriptor}*.fits.gz'))
-    
-    if len(fdt_files) == 0:
-        print(f'No FDT NRT {descriptor} file, looking for LL')
-        for d in dates:
-            fdt_files += sorted(glob.glob(f'/data/solo/phi/data/fmdb/ll/{d}/*phi-fdt-{descriptor}*.fits.gz'))
+        if len(fdt_files) == 0:
+            print(f'No FDT L2 {descriptor} file, looking for NRT')
+            for d in dates:
+                fdt_files += sorted(glob.glob(f'/scratch/valori/nrt_fmdb/l2/{d}/*phi-fdt-{descriptor}*.fits.gz'))
+        
+        if len(fdt_files) == 0:
+            print(f'No FDT NRT {descriptor} file, looking for LL')
+            for d in dates:
+                if d not in LL_dates_corrupted:
+                    fdt_files += sorted(glob.glob(f'/data/solo/phi/data/fmdb/ll/{d}/*phi-fdt-{descriptor}*.fits.gz'))
 
-    if len(fdt_files) == 0:
-        print(f'No FDT LL {descriptor} file, looking for L1')
-        for d in dates:
-            fdt_files += sorted(glob.glob(f'/data/solo/phi/data/fmdb/l1/{d}*phi-fdt-*lam*.fits.gz'))
-        filename = filename.replace(descriptor, 'icnt')
-        if os.path.isfile(filename):
-            print('Using raw FDT data, so I will use HRT continuum intensity')
+        # if len(fdt_files) == 0:
+        #     print(f'No FDT LL {descriptor} file, looking for L1')
+        #     for d in dates:
+        #         fdt_files += sorted(glob.glob(f'/data/solo/phi/data/fmdb/l1/{d}*phi-fdt-*lam*.fits.gz'))
+        #     filename = filename.replace(descriptor, 'icnt')
+        #     if os.path.isfile(filename):
+        #         print('Using raw FDT data, so I will use HRT continuum intensity')
+        #     else:
+        #         raise FileNotFoundError('There is no HRT continuum intensity associated to this file!')
+
+        if len(fdt_files) == 0:
+            delta_days += 1
+            if delta_days <= MAX_DAYS:
+                print('Increasing delta_days to ',delta_days)
         else:
-            raise FileNotFoundError('There is no HRT continuum intensity associated to this file!')
-
+            break
     if len(fdt_files) == 0:
         raise FileNotFoundError('There is no FDT file associated to this HRT, sorry :-(')
 
@@ -311,7 +325,7 @@ def run_FDT_correction(data, header, verbose = False, **kwargs):
             printc('There was an error in the WCS correction, return None', color=bcolors.FAIL)
             for key in newWCS.keys():
                 newWCS[key].append(None)
-            pass
+            continue
 
         if parameters['print_values']:
             for e,v in zip(ends,n.values()):

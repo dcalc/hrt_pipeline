@@ -114,11 +114,15 @@ def rotate_header(h,angle,center = [1024.5,1024.5]):
     h: astropy.io.fits.header.Header
         new header
     """
-    h['CROTA'] -= angle
-    h['PC1_1'] = np.cos(h['CROTA']*np.pi/180)
-    h['PC1_2'] = -np.sin(h['CROTA']*np.pi/180)
-    h['PC2_1'] = np.sin(h['CROTA']*np.pi/180)
-    h['PC2_2'] = np.cos(h['CROTA']*np.pi/180)
+    if 'CROTA' in h:
+        k = 'CROTA' # positive angle = clock-wise rotation of the reference system axes 
+    else:
+        k = 'CROTA2'
+    h[k] -= angle
+    h['PC1_1'] = np.cos(h[k]*np.pi/180)
+    h['PC1_2'] = -np.sin(h[k]*np.pi/180)
+    h['PC2_1'] = np.sin(h[k]*np.pi/180)
+    h['PC2_2'] = np.cos(h[k]*np.pi/180)
     rad = angle * np.pi/180
     rot = np.asarray([[np.cos(rad),-np.sin(rad),0],[np.sin(rad),np.cos(rad),0],[0,0,1]])
     coords = np.asarray([h['CRPIX1'],h['CRPIX2'],1])
@@ -160,7 +164,10 @@ def translate_header(h,tvec,mode='crpix'):
     """
     if mode == 'crval':
         tr = np.asarray([[1,0,-tvec[1]],[0,1,-tvec[0]],[0,0,1]])
-        angle = h['CROTA'] # positive angle = clock-wise rotation of the reference system axes 
+        if 'CROTA' in h:
+            angle = h['CROTA'] # positive angle = clock-wise rotation of the reference system axes 
+        else:
+            angle = h['CROTA2']
         rad = angle * np.pi/180
         vec = np.asarray([tvec[1],tvec[0],1])
         rot = np.asarray([[np.cos(rad),-np.sin(rad),0],[np.sin(rad),np.cos(rad),0],[0,0,1]])

@@ -172,6 +172,12 @@ def plot_l2_pdf(path,did,version=None,save_output=True,plot_noise=True,plot_stok
         'binc_cmap':cmr.fusion,
         'bmag_cmap':'gnuplot_r', # bmag_cmap(), # 
         'bazi_cmap':'hsv',
+        'icnt_clim':(.3,1.2),
+        'vlos_clim':(-2,2),
+        'blos_clim':(-1500,1500),
+        'binc_clim':(0,180),
+        'bmag_clim':(0,2000), # (0,3000) # 
+        'bazi_clim':(0,180),
         'panel_sz': 4,
         'dpi': 300,
         'rows': 2,
@@ -242,7 +248,7 @@ def plot_l2_pdf(path,did,version=None,save_output=True,plot_noise=True,plot_stok
 
     # Continuum intensity
     ax = axs[0, 0]
-    im = ax.imshow(dat['icnt'], cmap=params['icnt_cmap'], vmin=0.2, vmax=1.2,interpolation='none')
+    im = ax.imshow(dat['icnt'], cmap=params['icnt_cmap'], clim = params['icnt_clim'],interpolation='none')
     dataset_colorbar(ax,im,"right")
     ax.set_title('Continuum intensity')
 
@@ -250,31 +256,31 @@ def plot_l2_pdf(path,did,version=None,save_output=True,plot_noise=True,plot_stok
     ax = axs[0, 1]
     shape = dat['vlos'].shape
     avg = dat['vlos'][int(shape[0]//4):-int(shape[0]//4),int(shape[1]//4):-int(shape[1]//4)].mean()
-    im = ax.imshow(dat['vlos'], cmap=params['vlos_cmap'], vmin=-2+avg, vmax=2+avg,interpolation='none')
+    im = ax.imshow(dat['vlos'], cmap=params['vlos_cmap'], clim = (params['vlos_clim'][0]+avg, params['vlos_clim'][1]+avg),interpolation='none')
     dataset_colorbar(ax,im,"right", label='km/s')
     ax.set_title('LoS velocity')
 
     # BLOS
     ax = axs[0, 2]
-    im = ax.imshow(dat['blos'], cmap=params['blos_cmap'], vmin=-1500, vmax=1500,interpolation='none')
+    im = ax.imshow(dat['blos'], cmap=params['blos_cmap'], clim = params['blos_clim'],interpolation='none')
     dataset_colorbar(ax,im,"right", label='G')
     ax.set_title('LoS magnetic field')
 
     # B inclination
     ax = axs[1, 0]
-    im = ax.imshow(dat['binc'], cmap=params['binc_cmap'], vmin=0, vmax=180,interpolation='none')
+    im = ax.imshow(dat['binc'], cmap=params['binc_cmap'], clim = params['binc_clim'],interpolation='none')
     dataset_colorbar(ax,im,"right", label='°')
     ax.set_title('Magn. field inclination')
 
     # B
     ax = axs[1, 1]
-    im = ax.imshow(dat['bmag'], cmap=params['bmag_cmap'], vmin=0, vmax=2000,interpolation='none')
+    im = ax.imshow(dat['bmag'], cmap=params['bmag_cmap'], clim = params['bmag_clim'],interpolation='none')
     dataset_colorbar(ax,im,"right", label='G')
     ax.set_title('Magn. field strength')
 
     # B azimuth
     ax = axs[1, 2]
-    im = ax.imshow(dat['bazi'], cmap=params['bazi_cmap'], vmin=0, vmax=180,interpolation='none')
+    im = ax.imshow(dat['bazi'], cmap=params['bazi_cmap'], clim = params['bazi_clim'],interpolation='none')
     dataset_colorbar(ax,im,"right", label='°')
     ax.set_title('Magn. field azimuth')
 
