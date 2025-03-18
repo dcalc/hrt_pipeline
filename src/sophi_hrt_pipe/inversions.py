@@ -473,7 +473,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
                     mask=mask[:,:,scan],
                     initial_model=initial_model,
                     cavity=cavity,
-                    mu=mu,
+                    # mu=mu,
                     parallel=parallel, num_workers=num_workers)
         else:
             if Nw == 1:
@@ -492,7 +492,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
                     mask=~ar_mask,
                     initial_model=initial_model[0],
                     cavity=cavity,
-                    mu=mu,
+                    # mu=mu,
                     parallel=parallel, num_workers=num_workers)
 
             # QS
@@ -506,7 +506,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
                     mask=ar_mask,
                     initial_model=initial_model[1],
                     cavity=cavity,
-                    mu=mu,
+                    # mu=mu,
                     parallel=parallel, num_workers=num_workers)
 
             rte_invs = rte_invs1*ar_mask+rte_invs0*(~ar_mask)
