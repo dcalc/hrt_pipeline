@@ -2240,6 +2240,8 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr, derivative = True
                 old_data, _, _ = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), sly=slice(0,dat.shape[0]), slx=slice(0,dat.shape[1]),
                                             mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0, low_f=0.1, aberr_cor=False, PD_f=deconv['PD_f'], straylight_corr=deconv['straylight_correction'])
                 sly, slx = slice(5,sly.stop-sly.start+5), slice(5,slx.stop-slx.start+5)
+            else:
+                old_data = data[...,scan].copy()
         else:
             old_data = data[...,scan].copy()
 
@@ -2404,8 +2406,9 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         PD = (PD - D[np.newaxis,rows,cols])# / F[np.newaxis,:,:,0,5]
 
     if prefilter_f is not None:
-        prefilter, _ = load_fits(prefilter_f)
-        prefilter = prefilter[:,::-1]
+        if os.path.isfile(prefilter_f):
+            prefilter, _ = load_fits(prefilter_f)
+            prefilter = prefilter[:,::-1]
     
         tunning_constant = 0.0003513 # this shouldn't change
         # temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
@@ -2418,9 +2421,11 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         else:
             wl = Volt * tunning_constant + ref_wavelength
         fakePD = np.zeros((data_size[0],data_size[1],4,nfocus,1)); fakePD[:,:,0,:,0] = np.moveaxis(PD.copy(),0,-1);
-        # voltagesData_arr = [np.asarray([Volt,Volt,Volt,Volt,Volt,Volt])]
         wlData_arr = [np.ones(nfocus)*wl]
-        fakePD = prefilter_correction(fakePD,wlData_arr,prefilter[rows,cols],Tetalon=Tfg,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=None)
+        if os.path.isfile(prefilter_f):
+            fakePD = prefilter_correction(fakePD,wlData_arr,prefilter[rows,cols],Tetalon=Tfg,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=None)
+        else:
+            fakePD = prefilter_correction_WLS(fakePD,wlData_arr,rows,cols,Tetalon=Tfg, prefilter_f=prefilter_f)
         PD = np.squeeze(np.moveaxis(fakePD[:,:,0,:,0],2,0))
         
     
@@ -2437,7 +2442,7 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         
         F = compare_IMGDIRX(F,True,'YES',header_flatdirx_exists,flatdirx_flipped)
         F = stokes_reshape(F)
-        wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)
+        wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = False,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)
 
         if norm_f:
             F = F/F[slice(1024-256,1024+256),slice(1024-256,1024+256)].mean(axis=(0,1))[np.newaxis,np.newaxis]
@@ -2446,7 +2451,10 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
 
         if prefilter_f is not None:
             TFfg = hF['FGOV1PT1']
-            F = prefilter_correction(F[...,np.newaxis],[wave_flat],prefilter,Tetalon=TFfg,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=None)[...,0]
+            if os.path.isfile(prefilter_f):
+                F = prefilter_correction(F[...,np.newaxis],[wave_flat],prefilter,Tetalon=TFfg,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=None)[...,0]
+            else:
+                F = prefilter_correction_WLS(F[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),Tetalon=TFfg, prefilter_f=prefilter_f)[...,0]
         PD = PD / F[np.newaxis,rows,cols,0,cpos_f]
     
     field_stop_loc = os.path.realpath(__file__)

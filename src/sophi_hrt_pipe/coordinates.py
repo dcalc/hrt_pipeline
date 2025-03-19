@@ -45,7 +45,10 @@ def mu_angle(hdr,coord=None):
     else:
         coord -= center[:2,np.newaxis]
     temp = Rpix**2 - (coord[0]**2 + coord[1]**2)
-    temp[temp<0] = np.nan
+    if isinstance(temp, (list,np.ndarray)):
+        temp[temp<0] = np.nan
+    else:
+        if temp < 0: temp = np.nan
     mu = np.sqrt(temp) / Rpix
     
     return mu

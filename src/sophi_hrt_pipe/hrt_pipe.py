@@ -716,7 +716,8 @@ def phihrt_pipe(input_json_file):
         printc('-->>>>>>> Polarimetric Frames Registration (--> ISS OFF)',color=bcolors.OKGREEN)
         #find central region, on disc, for the registration region
         # limb_side, _, _, sly, slx = limb_side_finder(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)])
-        
+        start_time = time.perf_counter()
+
         # added here to have the high contrast slices
         # AR_temp = ARmasking(demod_hrt(data[...,0].copy(),pmp_temp,False)[0], field_stop[rows,cols], cpos = cpos_arr[0]) # for ellipse limb fit
         _, sly, slx, _ = limb_ellipse(data[:,:,0,cpos_arr[0],0], hdr_arr[0],field_stop[rows,cols],field_stop[rows,cols],high_contrast=True)
@@ -730,9 +731,6 @@ def phihrt_pipe(input_json_file):
                 field_stop_ghost = ~binary_dilation(field_stop_ghost==0,generate_binary_structure(2,2), iterations=3)
                 field_stop_ghost = np.where(field_stop_ghost > 0,1,0)
                 
-        
-        start_time = time.perf_counter()
-
         data, hdr_arr = polarimetric_registration(data, sly, slx, hdr_arr)
         
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
@@ -1088,6 +1086,10 @@ def phihrt_pipe(input_json_file):
         print(" ")
         printc('-->>>>>>> No PSF deconvolution on Stokes vectors',color=bcolors.WARNING)
         PSF = np.zeros((data.shape[0],data.shape[1]))
+        if cavity_c:
+            cavity = cavity[rows,cols]
+        else:
+            cavity = None
 
     #-----------------
     # CHECK FOR INFs

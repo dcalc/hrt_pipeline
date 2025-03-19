@@ -134,7 +134,7 @@ def get_data(path, scaling = True, bit_convert_scale = True, scale_data = True):
         raise ValueError()
        
 
-def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = True, TemperatureConstant = 40.323e-3, verbose = False):
+def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = True, TemperatureConstant = 40.1225e-3, verbose = False):
     '''Open fits file, extract the wavelength axis and the continuum position, from Voltages in header
 
     Parameters
@@ -146,7 +146,7 @@ def fits_get_sampling(file,num_wl = 6, TemperatureCorrection = True, Temperature
     TemperatureCorrection: bool
         if True, apply temperature correction to the wavelength axis
     TemperatureConstant: float
-        Temperature constant to be used when TemperatureCorrection is True. Default: 40.323e-3 Å/K. Suggested (old) value: 36.46e-3 Å/K
+        Temperature constant to be used when TemperatureCorrection is True. Default: 40.1225e-3 Å/K. Old: 40.323e-3 Å/K. Suggested (old) value: 36.46e-3 Å/K
     verbose: bool
         if True, print the continuum position
     
