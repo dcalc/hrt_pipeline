@@ -10,7 +10,7 @@ from scipy.ndimage import binary_dilation, binary_erosion, generate_binary_struc
 
 from .utils import printc, bcolors, get_data, fits_get_sampling, check_size, check_cpos, check_pmp_temp, stokes_reshape, compare_IMGDIRX, compare_cpos, load_fits, cavity_shifts, ARmasking, check_IMGDIRX, check_filenames
 
-from .processes import setup_header, apply_dark_correction, load_and_process_flat, prefilter_correction_WLS, normalise_flat, unsharp_masking, flat_correction, apply_field_stop, hot_pixel_mask, load_ghost_field_stop, polarimetric_registration, wavelength_registration, demod_hrt, crosstalk_2D_ItoQUV, crosstalk_auto_VtoQU, CT_VtoQU, write_out_intermediate, data_hdr_kw, limb_ellipse
+from .processes import setup_header, apply_dark_correction, load_and_process_flat, prefilter_correction_WLS, normalise_flat, unsharp_masking, flat_correction, apply_field_stop, hot_pixel_mask, load_ghost_field_stop, polarimetric_registration, wavelength_registration, demod_hrt, crosstalk_2D_ItoQUV, crosstalk_auto_VtoQU, CT_VtoQU, write_out_intermediate, data_hdr_kw, limb_ellipse, average_registration
 
 from .inversions import generate_l2, create_output_filenames, cog
 from .coordinates import muSO_map
@@ -799,7 +799,7 @@ def phihrt_pipe(input_json_file):
                     #get region of pixels for norm, which are for certain on disc
                     Ic_temp = np.zeros((data_size[0],data_size[1]))
                     Ic_temp[sly,slx] = 1
-                    Ic_temp *= field_stop[rows,cols]
+                    # Ic_temp *= field_stop[rows,cols]
                     Ic_temp = np.where(Ic_temp>0,1,0) #final making sure
 
                     #for use later in the CT correction
@@ -807,6 +807,7 @@ def phihrt_pipe(input_json_file):
                     limb_mask[...,scan] = limb_temp 
                     limb_percent_temp = np.where(limb_percent_temp>0,1,0)
                     limb_percent_mask[...,scan] = limb_percent_temp 
+                    
                     limb = True
                     hdr_arr[scan].set('CAL_LIMB','{:.3f}, {:.3f}, {:.3f}, {:.3f}, {:.3f}'.format(*ellipse_fit.x),'[a,b,h,k,A] - ellipse axes (x,y), centers (x,y) and angle',after='CAL_REAL')
                    
@@ -828,9 +829,7 @@ def phihrt_pipe(input_json_file):
                 limb_percent_mask *= field_stop[rows,cols,np.newaxis]
             
             Ic_temp = np.array(Ic_temp, dtype=bool)
-            limb_mask = np.array(limb_mask, dtype=bool)
-            limb_percent_mask = np.array(limb_percent_mask, dtype=bool)
-            
+        
             ##################################################################
             """new Icont normalization removing high magnetic field regions"""
             # AR_temp = np.ones(Ic_temp.shape,dtype=bool)
@@ -856,7 +855,10 @@ def phihrt_pipe(input_json_file):
             Ic_mask[...,scan] = Ic_temp
             AR_mask[...,scan] = AR_temp
             hdr_arr[scan]['CAL_NORM'] = round(I_c[scan],4) # DC 20211116
-
+        
+        limb_mask = np.array(limb_mask, dtype=bool)
+        limb_percent_mask = np.array(limb_percent_mask, dtype=bool)
+        
         if out_intermediate:
             data_demod_normed = data.copy()
 
@@ -896,7 +898,8 @@ def phihrt_pipe(input_json_file):
                                                                                   mode=CTmode,
                                                                                   threshold = .5,
                                                                                   divisions = 16,
-                                                                                  norma = 1)
+                                                                                  norma = 1,
+                                                                                  ind_wave=False)
             # CTparams[...,scan] = ctalk_params
             
             # scan_hdr['CAL_CRT0'] = round(ctalk_params[slope,q],4) #I-Q slope
@@ -1008,6 +1011,16 @@ def phihrt_pipe(input_json_file):
         print(" ")
         printc('-->>>>>>> No frame registration (--> ISS ON)',color=bcolors.WARNING)
 
+    #-----------------
+    # AVERAGING MULTIPLE SCANS
+    #-----------------
+
+    if data_shape[-1] > 1:
+        printc('-->>>>>>> Correlating and averaging the Scans',color=bcolors.OKGREEN)
+            
+        data = average_registration(data, cpos_arr, sly, slx)
+
+        data_shape = data.shape # last dimension is 1 now
     #-----------------
     # PSF DECONVOLUTION ON STOKES
     #-----------------
@@ -1234,25 +1247,6 @@ def phihrt_pipe(input_json_file):
                 tmp = data_demod_normed[:,:,:,:,count]
                 tmp = np.moveaxis(tmp, [-1,-2], [0,1])
                 write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, vrs, out_dir, bunit = 'I_CONT', btype = 'STOKES')
-
-            if PSFstokes['deconvolution']:
-                history_str = f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {ItoQUV}. PSF deconvolution: {True}"
-                file_suffix = 'stokes_noPSF'
-                tmp = data_not_deconvolved[:,:,:,:,count]
-                tmp = np.moveaxis(tmp, [-1,-2], [0,1])
-                write_out_intermediate(tmp, hdr_interm, history_str, scan, root_scan_name, file_suffix, vrs, out_dir, bunit = 'I_CONT', btype = 'STOKES')
-                
-                if cavity_c:
-                    new_cavity_f = out_dir + cavity_f.split('/')[-1].replace('cavity','cavityPSF').replace('V02','V'+hdr_interm['PHIDATID'])
-                    print('Writing deconvolved cavity file')
-                    with fits.open(cavity_f) as hdr_cavity:
-                        hdr_cavity[0].data = cavity
-                        hdr_cavity[0].header['PXBEG1'] = hdr_interm['PXBEG1']
-                        hdr_cavity[0].header['PXBEG2'] = hdr_interm['PXBEG2']
-                        hdr_cavity[0].header['PXEND1'] = hdr_interm['PXEND1']
-                        hdr_cavity[0].header['PXEND2'] = hdr_interm['PXEND2']
-                        hdr_cavity[0].header['HISTORY'] = 'Cavity deconvolved with PSF associated to '+scan
-                        hdr_cavity.writeto(new_cavity_f,overwrite=True)
                         
     else:
         print(" ")
@@ -1266,7 +1260,8 @@ def phihrt_pipe(input_json_file):
         print(" ")
         print('Saving unreconstructed stokes files')
 
-        for count, scan in enumerate(data_f):
+        for count in range(data_shape[-1]):
+            scan = data_f[count]
             history_str = f"Intermediate. Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {ItoQUV}. PSF deconvolution: {True}"
             file_suffix = 'stokes_noPSF'
             tmp = data_not_deconvolved[:,:,:,:,count]
@@ -1357,7 +1352,8 @@ def phihrt_pipe(input_json_file):
         if not scan_name_defined: #check if already defined by user - if not, use auto name generation function
             scan_name_list = check_filenames(data_f) #extract the DIDs and check no duplicates
         
-        for count, scan in enumerate(data_f):
+        for count in range(data_shape[-1]):
+            scan = data_f[count]
 
             if ".gz" in scan:
                 gzip = True

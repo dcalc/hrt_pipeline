@@ -1145,9 +1145,15 @@ def crosstalk_2D_ItoQUV(data: np.ndarray,
         
         # correction
         corrected_data = np.copy(data)
-        corrected_data[:, :, 1] = data[:, :, 1] - sfitQ[0][0][...,np.newaxis] * data[:, :, 0] - sfitQ[1][0][...,np.newaxis]
-        corrected_data[:, :, 2] = data[:, :, 2] - sfitU[0][0][...,np.newaxis] * data[:, :, 0] - sfitU[1][0][...,np.newaxis]
-        corrected_data[:, :, 3] = data[:, :, 3] - sfitV[0][0][...,np.newaxis] * data[:, :, 0] - sfitV[1][0][...,np.newaxis]
+        if ind_wave:
+            wavelength_norm = data[mask>0,0,continuum_pos].mean()/data[mask>0,0,:].mean(0)
+        else:
+            wavelength_norm = 1
+        
+        corrected_data = np.copy(data)
+        corrected_data[:, :, 1] = data[:, :, 1] - wavelength_norm*sfitQ[0][0][...,np.newaxis] * data[:, :, 0] - wavelength_norm*sfitQ[1][0][...,np.newaxis]
+        corrected_data[:, :, 2] = data[:, :, 2] - wavelength_norm*sfitU[0][0][...,np.newaxis] * data[:, :, 0] - wavelength_norm*sfitU[1][0][...,np.newaxis]
+        corrected_data[:, :, 3] = data[:, :, 3] - wavelength_norm*sfitV[0][0][...,np.newaxis] * data[:, :, 0] - wavelength_norm*sfitV[1][0][...,np.newaxis]
 
         return cQ, cU, cV, sfitQ, sfitU, sfitV, corrected_data
     
@@ -1924,8 +1930,9 @@ def limb_ellipse(img, hdr, field_stop, AR_mask, verbose=True, percent=False, fit
     hi = np.histogram(img[s:-s,s:-s][AR_mask[s:-s,s:-s]>0].flatten(),bins=100);
     gres, cov = double_gaussian_fit(hi,False,True)
     
-    if (np.any((np.sqrt(np.diagonal(cov))/gres)[:3] > 100) or np.any(np.isnan(cov))): # sometimes south pole limb is not found, so extra condition on fit
-        output = [None,sly,slx,side]
+    if (np.any((np.sqrt(np.diagonal(cov))/gres)[:3] > 100) or np.any(np.isnan(cov))) or gres[1] > gres[4]*0.7: # sometimes south pole limb is not found, so extra condition on fit
+        output = [None,sly,slx,'']
+        printc('Despite the WCS, it looks like the Limb is not in the FoV',bcolors.WARNING)
         
         if debug:
             return {'hi':hi,'gres':gres,'cov':cov,'center':center,'Rpix':Rpix}
@@ -2206,9 +2213,6 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr, derivative = True
         header array with updated CAL_WREG keyword
     """
 
-    pn = 4
-    wln = 6
-    
     if cpos_arr[0] == 5:
         l_i =    [0,1,3,4,2] # shift wl
         refl_i = [5,0,1,5,3]
@@ -2220,9 +2224,10 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr, derivative = True
         # refl_i = [0,1,2,3,4]
         cwl = 3
     
-    new_data = data.copy()
+    # new_data = data.copy()
         
     data_shape = data.shape
+    _,_,pn,wln,_ = data_shape
     data_size = data_shape[:2]
     if derivative:
         im_der = lambda x: image_derivative(x)
@@ -2230,56 +2235,116 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr, derivative = True
         im_der = lambda x: x
 
     for scan in range(data_shape[-1]):
-        shift_stk = np.zeros((2,wln-1))
+
         if deconv != False and isinstance(deconv, dict):
             if deconv['deconvolution']:
                 from sophi_hrt_pipe.PSF import fran_restore
                 dat = data[sly.start-5:sly.stop+5,slx.start-5:slx.stop+5,:,:,scan].copy()
                 # old_data, _ = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']),
                 #                             mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0.02, low_f=0.8, aberr_cor=False)
-                old_data, _, _ = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), sly=slice(0,dat.shape[0]), slx=slice(0,dat.shape[1]),
-                                            mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0, low_f=0.1, aberr_cor=False, PD_f=deconv['PD_f'], straylight_corr=deconv['straylight_correction'])
+                old_data, _, _ = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), 
+                                              sly=slice(0,dat.shape[0]), slx=slice(0,dat.shape[1]),
+                                              mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0, low_f=0.1, aberr_cor=False, 
+                                              PD_f=deconv['PD_f'], straylight_corr=deconv['straylight_correction'])
                 sly, slx = slice(5,sly.stop-sly.start+5), slice(5,slx.stop-slx.start+5)
             else:
                 old_data = data[...,scan].copy()
         else:
             old_data = data[...,scan].copy()
 
-        for i,l in enumerate(l_i):
+        repeat=1
+        hdr_arr[scan]['CAL_WREG'] = ''
+        while repeat%4: # repeat the correlation if limit of 10 iterations is reached (max 2 more times)
+            shift_stk = np.zeros((2,wln))
+            for i,l in enumerate(l_i):
 
-            ref = im_der(old_data[:,:,0,refl_i[i]].copy())[sly,slx]
-            temp = im_der(old_data[:,:,0,l])[sly,slx]
-            it = 0
-            s = [1,1]
-            # if l == cwl:
-            #     temp = im_der(np.abs(old_data[:,:,0,l,scan]))[sly,slx]
-            #     ref = im_der(np.abs((data[:,:,0,l-1,scan] + data[:,:,0,l+1,scan]) / 2))[sly,slx]
-            
-            while np.any(np.abs(s)>.5e-2):#for it in range(iterations):
-                sr, sc, r = SPG_shifts_FFT(np.asarray([ref,temp]))
-                s = [sr[1],sc[1]]
-                shift_stk[:,i] = [shift_stk[0,i]+s[0],shift_stk[1,i]+s[1]]
-                temp = im_der(fft_shift(old_data[:,:,0,l].copy(), shift_stk[:,i]))[sly,slx]
+                ref = im_der(old_data[:,:,0,refl_i[i]].copy())[sly,slx]
+                temp = im_der(old_data[:,:,0,l].copy())[sly,slx]
+                it = 0
+                s = [1,1]
+                # if l == cwl:
+                #     temp = im_der(np.abs(old_data[:,:,0,l,scan]))[sly,slx]
+                #     ref = im_der(np.abs((data[:,:,0,l-1,scan] + data[:,:,0,l+1,scan]) / 2))[sly,slx]
+                
+                while np.any(np.abs(s)>.5e-2):#for it in range(iterations):
+                    sr, sc, r = SPG_shifts_FFT(np.asarray([ref,temp]))
+                    s = [sr[1],sc[1]]
+                    shift_stk[:,l] = [shift_stk[0,l]+s[0],shift_stk[1,l]+s[1]]
+                    temp = im_der(fft_shift(old_data[:,:,0,l].copy(), shift_stk[:,l]))[sly,slx]
 
-                it += 1
-                if it == 10:
-                    break
-            print(it,'iterations shift (x,y):',round(shift_stk[1,i],3),round(shift_stk[0,i],3))
-            
-            for ss in range(pn):
-                Mtrans = np.float32([[1,0,shift_stk[1,i]],[0,1,shift_stk[0,i]]])
-                new_data[:,:,ss,l,scan]  = cv2.warpAffine(data[:,:,ss,l,scan].copy().astype(np.float32), Mtrans, data_size[::-1], flags=cv2.INTER_LANCZOS4)
-            
-            old_data[:,:,0,l]  = cv2.warpAffine(old_data[:,:,0,l].copy().astype(np.float32), Mtrans, (old_data.shape[0],old_data.shape[1]), flags=cv2.INTER_LANCZOS4)
+                    it += 1
+                    if it == 10:
+                        repeat += 1
+                        break
+                    else:
+                        repeat = 0 # no need for repetition
+
+                print(it,'iterations shift (x,y):',round(shift_stk[1,l],3),round(shift_stk[0,l],3))
+                
+                for ss in range(pn):
+                    Mtrans = np.float32([[1,0,shift_stk[1,l]],[0,1,shift_stk[0,l]]])
+                    data[:,:,ss,l,scan]  = cv2.warpAffine(data[:,:,ss,l,scan].copy().astype(np.float32), Mtrans, data_size[::-1], flags=cv2.INTER_LANCZOS4)
+                
+                old_data[:,:,0,l]  = cv2.warpAffine(old_data[:,:,0,l].copy().astype(np.float32), Mtrans, (old_data.shape[0],old_data.shape[1]), flags=cv2.INTER_LANCZOS4)
 
             # if l == cwl:
             #     ref = image_derivative(old_data[:,:,0,cpos_arr[0],scan])[sly,slx]
         
-        hdr_arr[scan]['CAL_WREG'] = 'y: '+str([round(shift_stk[0,i],3) for i in range(wln-1)]) + ', x: '+str([round(shift_stk[1,i],3) for i in range(wln-1)])
+            hdr_arr[scan]['CAL_WREG'] += 'y: '+str([round(shift_stk[0,i],3) for i in range(wln)]) + ', x: '+str([round(shift_stk[1,i],3) for i in range(wln)])
     
     del old_data
 
-    return new_data, hdr_arr    
+    return data, hdr_arr    
+
+def average_registration(data, cpos_arr, sly, slx):
+    """Align the continuum, from the Stokes I image, of consecutive scans, using cv2.warpAffine and then average the scans
+
+    Parameters
+    ----------
+    data: ndarray
+        input data to be aligned in wavelength
+    cpos_arr: ndarray
+        array of continuum positions
+    sly: slice
+        slice in y direction
+    slx: slice
+        slice in x direction
+    
+    Returns
+    -------
+    data: ndarray
+        data with average registration applied and then averaged
+    """
+    ref = data[sly,slx,0,cpos_arr[0],0].copy()
+    old_data = data.copy()
+    data_shape = data.shape
+
+    for scan in range(1,data_shape[-1]):
+    
+        shift_raw = np.zeros((2,data_shape[-1]))
+        temp = old_data[sly,slx,0,cpos_arr[scan],scan]
+        it = 0
+        s = [1,1]
+                
+        while np.any(np.abs(s)>.5e-2):#for it in range(iterations):
+            sr, sc, r = SPG_shifts_FFT(np.asarray([ref,temp]))
+            s = [sr[1],sc[1]]
+            shift_raw[:,scan] = [shift_raw[0,scan]+s[0],shift_raw[1,scan]+s[1]]
+            
+            temp = fft_shift(old_data[:,:,0,cpos_arr[scan],scan], shift_raw[:,scan])[sly,slx]
+            it += 1
+            if it ==10:
+                break
+        
+        print(it,'iterations shift (x,y):',round(shift_raw[1,scan],3),round(shift_raw[0,scan],3))
+        Mtrans = np.float32([[1,0,shift_raw[1,scan]],[0,1,shift_raw[0,scan]]])
+        for l in range(6):
+            for p in range(4):
+                data[:,:,p,l,scan]  = cv2.warpAffine(old_data[:,:,p,l,scan].astype(np.float32), Mtrans, data_shape[:2], flags=cv2.INTER_LANCZOS4)
+        
+        data = np.mean(data,axis=-1)[...,np.newaxis]
+
+    return data
 
 def create_intermediate_hdr(data, hdr_interm, history_str, file_name, **kwargs):
     """add basic keywords to the intermediate file header
