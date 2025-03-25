@@ -2252,9 +2252,11 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr, derivative = True
         else:
             old_data = data[...,scan].copy()
 
-        repeat=1
+        count_repeat = 1
         hdr_arr[scan]['CAL_WREG'] = ''
-        while repeat%4: # repeat the correlation if limit of 10 iterations is reached (max 2 more times)
+        while count_repeat%3: # repeat the correlation if limit of 10 iterations is reached (max 3 more times)
+            count_repeat += 1
+            repeat=0
             shift_stk = np.zeros((2,wln))
             for i,l in enumerate(l_i):
 
@@ -2276,9 +2278,7 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr, derivative = True
                     if it == 10:
                         repeat += 1
                         break
-                    else:
-                        repeat = 0 # no need for repetition
-
+                    
                 print(it,'iterations shift (x,y):',round(shift_stk[1,l],3),round(shift_stk[0,l],3))
                 
                 for ss in range(pn):
@@ -2286,7 +2286,10 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr, derivative = True
                     data[:,:,ss,l,scan]  = cv2.warpAffine(data[:,:,ss,l,scan].copy().astype(np.float32), Mtrans, data_size[::-1], flags=cv2.INTER_LANCZOS4)
                 
                 old_data[:,:,0,l]  = cv2.warpAffine(old_data[:,:,0,l].copy().astype(np.float32), Mtrans, (old_data.shape[0],old_data.shape[1]), flags=cv2.INTER_LANCZOS4)
-
+            
+            if repeat == 0: # no need to repeat
+                count_repeat = 0
+            
             # if l == cwl:
             #     ref = image_derivative(old_data[:,:,0,cpos_arr[0],scan])[sly,slx]
         
