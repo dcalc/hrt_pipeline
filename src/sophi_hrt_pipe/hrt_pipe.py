@@ -1191,8 +1191,10 @@ def phihrt_pipe(input_json_file):
                 if v[0] is not None:
                     hdr_arr[scan][k] = v[0]
                     add_history = 'WCS updated by HRT pipeline using '+wcs_update.upper()+', S/W version: '+wcs_version+'. Check parent file for old WCS.'
+                    hdr_arr[scan]['CAL_WCS'] = True
                 else:
                     add_history = 'WCS not updated by HRT pipeline. Issue during the correction. S/W version: '+wcs_version
+                    hdr_arr[scan]['CAL_WCS'] = False
             
             hdr_arr[scan]['HISTORY'] = add_history
 
