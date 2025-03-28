@@ -156,7 +156,7 @@ def translate_header(h,tvec,mode='crpix'):
     h : astropy.io.fits.header.Header
         header of image to be translated
     tvec : list
-        vector to translate image by (in pixels) [x,y]
+        vector to translate image by (in pixels) [y,x]
     mode : str
         if 'crpix' (Default) the shift will be applied to CRPIX*, if 'crval' the shift will be applied to CRVAL*
 
@@ -192,6 +192,7 @@ def translate_header(h,tvec,mode='crpix'):
 def image_register(ref,im,subpixel=True,deriv=False,d=50):
     """
     credits: Marco Stangalini (2010, IDL version). Adapted for Python by Daniele Calchetti.
+    return shift as **(y,x)**
     """
     try:
         import pyfftw.interfaces.numpy_fft as fft

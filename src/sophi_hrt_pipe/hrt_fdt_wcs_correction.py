@@ -3,7 +3,7 @@ from matplotlib import pyplot as plt
 from astropy.io import fits
 from .utils import find_nearest, printc, bcolors
 from .coordinates import rotate_header, translate_header, center_coord, circular_mask, remap, fft_shift, image_register, Inv2, und
-from .processes import limb_side_finder
+from .processes import limb_side_finder, elliptical_mask
 # import argparse
 from datetime import datetime as DT
 from datetime import timedelta as TD
@@ -104,6 +104,19 @@ def prepare_data(hrt_file, fdt_file, crota_manual_correction=0.15, undistortion=
             hrt = hrt[:,:,0,cpos]
     original_shape = hrt.shape
 
+    if 'CAL_LIMB' in h_hrt:
+        p = np.asarray(eval(h_hrt['CAL_LIMB']))
+        n_erosion = 7
+        p[0] -= n_erosion; p[1] -= n_erosion # reducing the axis of the ellipse
+        ell = elliptical_mask(hrt.shape, p)
+        printc(f'Masking out {n_erosion} pixels from the limb',bcolors.WARNING)
+        hrt *= ell
+        
+        center = center_coord(h_hrt)
+        shift_center = [round(p[3] - center[1],2), round(p[2] - center[0],2)] # (y,x)
+        printc(f'Translating the header by {shift_center} pixels according to the center of the limb fit procedure',bcolors.WARNING)
+        h_hrt = translate_header(h_hrt.copy(),np.asarray(shift_center), mode='crval')
+
     #TODO: FDT undistortion as input and crop HRT after undistortion (?)
     if undistortion:
         if hrt.shape[0] == 2048:
@@ -201,6 +214,15 @@ def correction(hrt_map, fdt_map, deriv=False,verbose=False,max_iterations = 10):
         while np.any(np.abs(s)>1e-1) and it<10:
             if it == 0:
                 _,s = image_register(ref,temp,False,deriv)
+                # plt.figure(figsize=(18,6))
+                # plt.subplot(131)
+                # plt.imshow(cc,cmap='gray',origin='lower')
+                # plt.subplot(132)
+                # plt.imshow(ref,clim=(-50,50),cmap='bwr',origin='lower')
+                # plt.subplot(133)
+                # plt.imshow(temp,clim=(-50,50),cmap='bwr',origin='lower')
+                # plt.show()
+
                 if np.any(np.abs(s)==0):
                     _,s = image_register(ref,temp,True,deriv)
             else:
@@ -240,7 +262,7 @@ def correction(hrt_map, fdt_map, deriv=False,verbose=False,max_iterations = 10):
 def plot_fdt_hrt(fdt_map, hrt_map):
     fig = plt.figure(layout='tight',figsize=(7,7))
     ax = fig.add_subplot(projection=fdt_map)
-    plot = dict(clim=(-100,100))
+    plot = dict(clim=(-50,50))
     with Helioprojective.assume_spherical_screen(fdt_map.observer_coordinate,True):
         fdt_map.plot(axes=ax, **plot, cmap='gray', zorder=0)
         hrt_map.plot(axes=ax, **plot, cmap='bwr', alpha=0.5,
@@ -321,8 +343,8 @@ def run_FDT_correction(data, header, verbose = False, **kwargs):
 
         try:
             hrt_map, hrt_remap, n, t0, match = correction(hrt_map, fdt_map_rot, deriv=False,verbose=False)
-        except:
-            printc('There was an error in the WCS correction, return None', color=bcolors.FAIL)
+        except Exception as e:
+            printc(f"There was an error in the WCS correction, return None. This is the error: {e}", color=bcolors.FAIL)
             for key in newWCS.keys():
                 newWCS[key].append(None)
             continue
