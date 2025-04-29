@@ -5,7 +5,7 @@ PSF deconvolution provided by Francisco Javier Bailén (IAA)
 import numpy as np
 import datetime
 # from tqdm import tqdm
-from photutils import CircularAperture
+from photutils.aperture import CircularAperture
 from scipy.fftpack import fftshift, ifftshift, fft2, ifft2
 import sys
 import cv2
