@@ -1693,7 +1693,7 @@ def double_gaus(x,a0,x0,sigma0,a1,x1,sigma1):
     """
     return a0*np.exp(-(x-x0)**2/(2*sigma0**2)) + a1*np.exp(-(x-x1)**2/(2*sigma1**2))
 
-def double_gaussian_fit(a,show=True,covariance=False):
+def double_gaussian_fit(a,show=True,covariance=False,partial=4):
     """Two Gaussian fit for data 'a' from np.histogram or plt.hist
     The gaussian must be complitely separated and on opposite sides of the distribution
     Parameters
@@ -1704,6 +1704,8 @@ def double_gaussian_fit(a,show=True,covariance=False):
         show plot of fit, by default True
     covariance: bool, optional
         if True, reutn the covariance matrix (Default: False)
+    partial: int, optional
+        fraction of array to use for fitting the first gaussian, (Default: 4)
     Returns
     -------
     p : array
@@ -1712,8 +1714,8 @@ def double_gaussian_fit(a,show=True,covariance=False):
     xx=a[1][:-1] + (a[1][1]-a[1][0])/2
     y=a[0][:]
     # p0 = np.ones(6)
-    xx1 = xx[:xx.size//3]; xx2 = xx[xx.size//3:]
-    y1 = y[:y.size//3]; y2 = y[y.size//3:]
+    xx1 = xx[:xx.size//partial]; xx2 = xx[xx.size//partial:]
+    y1 = y[:y.size//partial]; y2 = y[y.size//partial:]
     p0=[max(y1),sum(xx1*y1)/sum(y1),np.sqrt(sum(y1 * (xx1 - sum(xx1*y1)/sum(y1))**2) / sum(y1)),max(y2),sum(xx2*y2)/sum(y2),np.sqrt(sum(y2 * (xx2 - sum(xx2*y2)/sum(y2))**2) / sum(y2))] #weighted avg of bins for avg and sigma inital values
     # p0[0]=y1[find_nearest(xx1,p0[1])-5:find_nearest(xx1,p0[1])+5].mean() #find init guess for ampltiude of gauss func
     # p0[3]=y2[find_nearest(xx2,p0[1])-5:find_nearest(xx2,p0[1])+5].mean() #find init guess for ampltiude of gauss func
@@ -1926,9 +1928,9 @@ def limb_ellipse(img, hdr, field_stop, AR_mask, verbose=True, percent=False, fit
         return output
 
     s = 5
-
-    hi = np.histogram(img[s:-s,s:-s][AR_mask[s:-s,s:-s]>0].flatten(),bins=100);
-    gres, cov = double_gaussian_fit(hi,False,True)
+    temp = img.copy()[s:-s,s:-s][AR_mask[s:-s,s:-s]>0].flatten()
+    hi = np.histogram(temp,bins=np.linspace(0,temp.max(),100)); del temp
+    gres, cov = double_gaussian_fit(hi,False,True,4)
     
     if (np.any((np.sqrt(np.diagonal(cov))/gres)[:3] > 100) or np.any(np.isnan(cov))) or gres[1] > gres[4]*0.7: # sometimes south pole limb is not found, so extra condition on fit
         output = [None,sly,slx,'']
@@ -1953,7 +1955,7 @@ def limb_ellipse(img, hdr, field_stop, AR_mask, verbose=True, percent=False, fit
     limb_mask = binary_erosion(binary_dilation(limb_mask,[[0,1,0],[1,1,1],[0,1,0]],iterations=20),[[0,1,0],[1,1,1],[0,1,0]],iterations=20,border_value=1)
     
     # erosion of field stop to avoid edges from there
-    limb_edge = image_derivative(limb_mask)*binary_erosion(field_stop,[[0,1,0],[1,1,1],[0,1,0]],iterations=20)[s:-s,s:-s]
+    limb_edge = image_derivative(limb_mask)*binary_erosion(field_stop[s:-s,s:-s],[[0,1,0],[1,1,1],[0,1,0]],iterations=5)
     yi, xi = np.where(limb_edge>0.9)
 
     p = least_squares(_residuals,x0 = [Rpix,Rpix,center[0],center[1],0], args=(xi,yi),
@@ -2322,9 +2324,10 @@ def average_registration(data, cpos_arr, sly, slx):
     old_data = data.copy()
     data_shape = data.shape
 
+    shift_raw = np.zeros((2,data_shape[-1]))
+
     for scan in range(1,data_shape[-1]):
     
-        shift_raw = np.zeros((2,data_shape[-1]))
         temp = old_data[sly,slx,0,cpos_arr[scan],scan]
         it = 0
         s = [1,1]
@@ -2345,7 +2348,7 @@ def average_registration(data, cpos_arr, sly, slx):
             for p in range(4):
                 data[:,:,p,l,scan]  = cv2.warpAffine(old_data[:,:,p,l,scan].astype(np.float32), Mtrans, data_shape[:2], flags=cv2.INTER_LANCZOS4)
         
-        data = np.mean(data,axis=-1)[...,np.newaxis]
+    data = np.mean(data,axis=-1)[...,np.newaxis]
 
     return data
 

@@ -1518,7 +1518,7 @@ def phi_disambig(bazi,bamb,method=2):
     input
     bazi: magnetic field azimut. Type: str or array
     bamb: disambiguation fits. Type: str or array
-    method: method selected for the disambiguation (0, 1 or 2). Type: int (2 as Default)
+    method: method selected for the disambiguation of not annealed points (0 for potential acute, 1 for random, 2 for radial acute). Type: int (2 as Default)
     
     output
     disbazi: disambiguated azimut. Type: array
