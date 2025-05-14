@@ -14,7 +14,7 @@ from .processes import setup_header, apply_dark_correction, load_and_process_fla
 
 from .inversions import generate_l2, create_output_filenames, cog
 from .coordinates import muSO_map
-from .hrt_fdt_wcs_correction import run_FDT_correction
+from .hrt_fdt_wcs_correction import run_FDT_correction, get_descriptor
 from .hrt_fdt_wcs_correction import VERSION as wcs_version
 
 from .PSF import fran_restore
@@ -343,6 +343,8 @@ def phihrt_pipe(input_json_file):
             hdr_arr[scan].comments['NAXIS2'] = 'number of pixels on the y axis'
             # hdr_arr[scan].comments['WAVEMIN'] = '[nm] min wavelength of observation'
             # hdr_arr[scan].comments['WAVEMAX'] = '[nm] max wavelength of observation'
+
+            hdr_arr[scan].set('PHIDTYPE', get_descriptor(data_f,'hrt'), 'PHI internal data type/name', after='DATAMAX')
 
         #--------
         # check if ISS is ON or OFF
@@ -847,7 +849,9 @@ def phihrt_pipe(input_json_file):
                 limb_percent_mask *= field_stop[rows,cols,np.newaxis]
             
             Ic_temp = np.array(Ic_temp, dtype=bool)
-        
+            limb_mask = np.array(limb_mask, dtype=bool)
+            limb_percent_mask = np.array(limb_percent_mask, dtype=bool)
+            
             ##################################################################
             """new Icont normalization removing high magnetic field regions"""
             # AR_temp = np.ones(Ic_temp.shape,dtype=bool)
@@ -865,10 +869,10 @@ def phihrt_pipe(input_json_file):
             # # erosion and dilation to remove small scale masked elements
             # AR_temp = ~binary_dilation(binary_erosion(~AR_temp.copy(),generate_binary_structure(2,2), iterations=3),generate_binary_structure(2,2), iterations=3)
 
-            AR_temp = ARmasking(data[...,scan], limb_percent_mask[:,:,scan], cpos = cpos_arr[scan])
+            AR_temp = ARmasking(data[...,scan], limb_mask[:,:,scan], cpos = cpos_arr[scan], dilation_iter = 6)
             ##################################################################
             
-            I_c[scan] = np.nanmean(data[Ic_temp*AR_temp,0,cpos_arr[0],int(scan)])
+            I_c[scan] = np.nanmean(data[Ic_temp*AR_temp*limb_percent_mask[...,scan],0,cpos_arr[0],int(scan)])
             data[:,:,:,:,scan] = data[:,:,:,:,scan]/I_c[scan]
             Ic_mask[...,scan] = Ic_temp
             AR_mask[...,scan] = AR_temp
@@ -1296,6 +1300,7 @@ def phihrt_pipe(input_json_file):
             hdr_unrec['BUNIT'] = 'I_CONT'
             hdr_unrec['DATAMIN'] = round(np.min(data_not_deconvolved[:,:,:,:,count]),1)
             hdr_unrec['DATAMAX'] = round(np.max(data_not_deconvolved[:,:,:,:,count]),1)
+            hdr_unrec['PHIDTYPE'] = 'unrec'
             if cavity_c:
                 hdr_unrec['CAL_CAVM'] = cavity_f
             hdr_unrec = data_hdr_kw(hdr_unrec, data_not_deconvolved[:,:,:,:,count]) #add datamedn, datamean etc
@@ -1335,6 +1340,7 @@ def phihrt_pipe(input_json_file):
             hdu_anc.header['LEVEL'] = 'L2'
             hdu_anc.header['BTYPE'] = 'ANCILLARY'
             hdu_anc.header['BUNIT'] = 'None'
+            hdu_anc.header['PHIDTYPE'] = 'ancillary'
             hdu_anc.header['ANCILL1'] = 'Cavity deconvolved with PSF'
             hdu_anc.header['ANCILL2'] = 'AR mask'
             hdu_anc.header['ANCILL3'] = 'Limb mask'
@@ -1387,12 +1393,18 @@ def phihrt_pipe(input_json_file):
             hdr_arr[count]['BUNIT'] = 'I_CONT'
             hdr_arr[count]['DATAMIN'] = round(np.min(data[:,:,:,:,count]),1)
             hdr_arr[count]['DATAMAX'] = round(np.max(data[:,:,:,:,count]),1)
+            hdr_arr[count]['PHIDTYPE'] = 'stokes'
             if cavity_c:
                 hdr_arr[count]['CAL_CAVM'] = cavity_f
             hdr_arr[count] = data_hdr_kw(hdr_arr[count], data[:,:,:,:,count]) #add datamedn, datamean etc
             hdr_interm = hdr_arr[count].copy()
             hdr_arr[count]['HISTORY'] = f"Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {ItoQUV}. PSF deconvolution: {hdr_arr[count]['CAL_PSF']}. Cavity correction: {cavity_c}"
             
+            if out_ancillary and out_unreconstructed and PSFstokes['deconvolution']:
+                hdr_arr[scan].set('UNRECONS', unrec_f, 'filename of the unreconstructed Stokes vector', after='PARENT')
+                hdr_arr[scan].set('ANCILLAR', anc_f, 'filename of the ancillary file where the PSF is stored', after='UNRECONS')
+                hdr_arr[scan]['HISTORY'] = "The unreconstructed Stokes vector and the ancillary file are stored in the file reported in UNRECONS and ANCILLAR keywords"
+                
             with fits.open(scan) as hdu_list:
                 print(f"Writing out stokes file as: {stokes_file}")
                 tmp = data[:,:,:,:,count].astype(np.float32)

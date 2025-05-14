@@ -168,6 +168,7 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
         hdr_scan['BUNIT'] = 'Gauss'
         hdr_scan['DATAMIN'] = int(np.min(im))
         hdr_scan['DATAMAX'] = int(np.max(im))
+        hdr_scan['PHIDTYPE'] = 'blos'
         hdr_scan = data_hdr_kw(hdr_scan, im)
 
         hdu_list[0].header = hdr_scan
@@ -185,6 +186,7 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
         hdr_scan['BUNIT'] = 'Degrees'
         hdr_scan['DATAMIN'] = int(0)
         hdr_scan['DATAMAX'] = int(180)
+        hdr_scan['PHIDTYPE'] = 'bazi'
         hdr_scan = data_hdr_kw(hdr_scan, im)
 
         hdu_list[0].header = hdr_scan
@@ -202,6 +204,7 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
         hdr_scan['BUNIT'] = 'Degrees'
         hdr_scan['DATAMIN'] = int(0)
         hdr_scan['DATAMAX'] = int(180)
+        hdr_scan['PHIDTYPE'] = 'binc'
         hdr_scan = data_hdr_kw(hdr_scan, im)
 
         hdu_list[0].header = hdr_scan
@@ -219,6 +222,7 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
         hdr_scan['BUNIT'] = 'Gauss'
         hdr_scan['DATAMIN'] = int(0)
         hdr_scan['DATAMAX'] = round(np.max(im),3)
+        hdr_scan['PHIDTYPE'] = 'bmag'
         hdr_scan = data_hdr_kw(hdr_scan, im)
 
         hdu_list[0].header = hdr_scan
@@ -236,6 +240,7 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
         hdr_scan['BUNIT'] = 'km/s'
         hdr_scan['DATAMIN'] = round(np.min(im),6)
         hdr_scan['DATAMAX'] = round(np.max(im),6)
+        hdr_scan['PHIDTYPE'] = 'vlos'
         hdr_scan = data_hdr_kw(hdr_scan, im)
 
         hdu_list[0].header = hdr_scan
@@ -253,6 +258,7 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
         hdr_scan['BUNIT'] = ' '
         hdr_scan['DATAMIN'] = round(np.min(im),6)
         hdr_scan['DATAMAX'] = round(np.max(im),6)
+        hdr_scan['PHIDTYPE'] = 'chi2'
         hdr_scan = data_hdr_kw(hdr_scan, im)
 
         hdu_list[0].header = hdr_scan
@@ -273,6 +279,7 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
         hdr_scan['BUNIT'] = 'Normalised Intensity'
         hdr_scan['DATAMIN'] = 0
         hdr_scan['DATAMAX'] = round(np.max(im),6)
+        hdr_scan['PHIDTYPE'] = 'icnt'
         hdr_scan = data_hdr_kw(hdr_scan, im)
 
         hdu_list[0].header = hdr_scan
@@ -290,6 +297,7 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
         hdr_scan['BUNIT'] = ''
         hdr_scan['DATAMIN'] = int(np.min(rte_data_products[2:]))
         hdr_scan['DATAMAX'] = int(np.max(rte_data_products[2:]))
+        hdr_scan['PHIDTYPE'] = 'FullModel'
         hdr_scan = data_hdr_kw(hdr_scan, rte_data_products[2:])
 
         hdu_list[0].header = hdr_scan
@@ -316,6 +324,7 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
             hdr_scan['BUNIT'] = 'I_CONT'
             hdr_scan['DATAMIN'] = int(np.min(synthetic_stokes))
             hdr_scan['DATAMAX'] = int(np.max(synthetic_stokes))
+            hdr_scan['PHIDTYPE'] = 'synt'
             hdr_scan = data_hdr_kw(hdr_scan, synthetic_stokes)
 
             hdu_list[0].header = hdr_scan
@@ -433,7 +442,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
             if initial_model.shape[0] == 2:
                 Nim = 2
         
-        ar_mask = ARmasking(sdata, mask[:,:,scan], cpos=cpos_arr[scan], dilation_iter=5)
+        ar_mask = ARmasking(sdata, mask[:,:,scan], cpos=cpos_arr[scan], dilation_iter=6)
         if weight == 'auto' or isinstance(weight,str):
             if Nim == 2:
                 Nw = 2

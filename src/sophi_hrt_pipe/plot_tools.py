@@ -4,6 +4,8 @@ import os
 
 from .processes import limb_side_finder
 from .utils import load_fits, fits_get_sampling, iter_noise, gaussian_fit, gaus
+from astropy.io import fits
+import datetime
 
 def dataset_colorbar(ax,im,location="top",label=None,xy=None,fontsize=9):
     from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -467,3 +469,134 @@ def plot_l2_pdf(path,did,version=None,save_output=True,plot_noise=True,plot_stok
     if save_output:
         p.close()
 
+def blos_noise(blos_file, iter=True, fs = None):
+    """plot blos on left panel, and blos hist + Gaussian fit (w/ iterative fit option - only shown in legend)
+
+    Parameters
+    ----------
+    blos_file : str
+        path to blos file
+    iter : bool, optional
+        performs iterative Gaussian fit, by default True
+    fs : array, optional
+        field stop mask, by default None
+
+    Returns
+    -------
+    p or p_iter: fit coefficients for Gaussian function
+    """
+    blos = fits.getdata(blos_file)
+    hdr = fits.getheader(blos_file)
+    #get the pixels that we want to consider (central 512x512 and limb handling)
+    _, _, _, sly, slx = limb_side_finder(blos, hdr)
+    values = blos[sly,slx]
+
+    fig, ax = plt.subplots(1,2, figsize = (14,6))
+    if fs is not None:
+        idx = np.where(fs<1)
+        blos[idx] = -300
+    im1 = ax[0].imshow(blos, cmap = "gray", origin = "lower", vmin = -200, vmax = 200)
+    fig.colorbar(im1, ax = ax[0], fraction=0.046, pad=0.04)
+    hi = ax[1].hist(values.flatten(), bins=np.linspace(-2e2,2e2,200))
+    tmp = [0,0]
+    tmp[0] = hi[0].astype('float64')
+    tmp[1] = hi[1].astype('float64')
+
+    #guassian fit + label
+    p = gaussian_fit(tmp, show = False)    
+    xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
+    lbl = f'{p[1]:.2e} $\pm$ {p[2]:.2e} G'
+    
+    if iter:
+        ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
+        try:
+            p_iter, hi_iter = iter_noise(values,[1.,0.,10.],eps=1e-4); p_iter[0] = p[0]
+            ax[1].plot(xx,gaus(xx,*p_iter),'g--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
+            # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
+        except:
+            print("Iterative Gauss Fit failed")
+            p_iter = p
+
+    else:
+        ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
+
+    ax[1].legend(fontsize=15)
+
+    date = blos_file.split('blos_')[1][:15]
+    dt_str = datetime.datetime.strptime(date, "%Y%m%dT%H%M%S")
+    fig.suptitle(f"Blos {dt_str}")
+
+    plt.tight_layout()
+    plt.show()
+
+    if iter:
+        return p_iter
+    else:
+        return p
+
+def stokes_noise(stokes_file, iter=True):
+    """plot stokes V on left panel, and Stokes V hist + Gaussian fit (w/ iterative option)
+
+    Parameters
+    ----------
+    stokes_file : str
+        path to stokes file
+    iter : bool, optional
+        whether to use iterative Gaussian fit, by default True
+
+    Returns
+    -------
+    p or p_iter: array
+        Gaussian fit parameters
+    """
+    stokes = fits.getdata(stokes_file)
+    if stokes.shape[0] == 6:
+        stokes = np.einsum('lpyx->yxpl',stokes)
+    hdr = fits.getheader(stokes_file)
+    out = fits_get_sampling(stokes_file)
+    cpos = out[3]
+    #first get the pixels that we want (central 512x512 and limb handling)
+    _, _, _, sly, slx = limb_side_finder(stokes[:,:,3,cpos], hdr)
+    values = stokes[sly,slx,3,cpos]
+
+    fig, ax = plt.subplots(1,2, figsize = (14,6))
+    im1 = ax[0].imshow(stokes[:,:,3,cpos], cmap = "gist_heat", origin = "lower", vmin = -1e-2, vmax = 1e-2)
+    fig.colorbar(im1, ax = ax[0], fraction=0.046, pad=0.04)
+    hi = ax[1].hist(values.flatten(), bins=np.linspace(-1e-2,1e-2,200))
+    #print(hi)
+    tmp = [0,0]
+    tmp[0] = hi[0].astype('float64')
+    tmp[1] = hi[1].astype('float64')
+
+    #guassian fit + label
+    p = gaussian_fit(tmp, show = False)    
+    xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
+    lbl = f'{p[1]:.2e} $\pm$ {p[2]:.2e}'
+    
+    if iter:
+        ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
+        try:
+            p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = p[0]
+            ax[1].plot(xx,gaus(xx,*p_iter),'g--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
+            # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
+        except:
+            print("Iterative Gauss Fit failed")
+            ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
+            p_iter = p
+
+    else:
+        ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
+
+    ax[1].legend(fontsize=15)
+
+    date = stokes_file.split('stokes_')[1][:15]
+    dt_str = datetime.datetime.strptime(date, "%Y%m%dT%H%M%S")
+    fig.suptitle(f"Stokes {dt_str}")
+
+    plt.tight_layout()
+    plt.show()
+
+    if iter:
+        return p_iter
+    else:
+        return p

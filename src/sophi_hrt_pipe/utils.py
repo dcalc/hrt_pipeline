@@ -4,10 +4,8 @@ import os
 import matplotlib.pyplot as plt
 import scipy.optimize as spo
 import scipy.signal as sps
-from datetime import datetime as dt
-import datetime
 import time
-from scipy.ndimage import binary_dilation, binary_erosion, generate_binary_structure
+from scipy.ndimage import binary_dilation, binary_erosion, binary_closing, generate_binary_structure
 
 from scipy.ndimage import map_coordinates
 from astropy import units as u
@@ -626,7 +624,7 @@ def filling_data(arr, thresh, mode, axis = -1):
                     a0[:,i] = a1
     return a0
     
-def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_iter = 3, dilation_iter = 3):
+def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_iter = 3, dilation_iter = 3, closing_iter = 20):
     """Creates a mask to cover active parts of the FoV
     Parameters
     ----------
@@ -644,6 +642,8 @@ def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_it
         number of iterations for the erosion of the mask (DEFAULT: 3)
     dilation_iter : int
         number of iterations for the dilation of the mask (DEFAULT: 3)    
+    closing_iter : int
+        number of iterations for the closing of the mask (DEFAULT: 20)    
 
     Returns
     -------
@@ -666,10 +666,12 @@ def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_it
     AR_mask = np.asarray(AR_mask, dtype=bool)
 
     # erosion and dilation to remove small scale masked elements
-    AR_mask = ~binary_dilation(binary_erosion(~AR_mask.copy(),generate_binary_structure(2,2), iterations=erosion_iter),
-                               generate_binary_structure(2,2), iterations=dilation_iter)
+    AR_mask = ~binary_closing(binary_dilation(binary_erosion(~AR_mask.copy(),generate_binary_structure(2,2), iterations=erosion_iter),
+                               generate_binary_structure(2,2), iterations=dilation_iter),generate_binary_structure(2,2), iterations=closing_iter)
     
-    return AR_mask
+    AR_mask = AR_mask * initial_mask
+
+    return np.array(AR_mask, dtype=bool)
 
 def auto_norm(file_name):
     """This function is used to normalize the data from the fits extensions
@@ -723,172 +725,6 @@ def circular_mask(h, w, center, radius):
 
     mask = dist_from_center <= radius
     return mask
-
-def limb_fitting(img, hdr, field_stop, verbose=True, percent=False, fit_results=False):
-    """Fits limb to the image using least squares method.
-
-    Parameters
-    ----------
-    img : numpy.ndarray
-        Image to fit limb to.
-    hdr : astropy.io.fits.header.Header
-        header of fits file
-    field_stop : array
-        field stop array
-    verbose : bool, optional
-        Print limb fitting results, by default True
-    percent : bool, optional
-        return mask with 96% of the readius, by default False
-    fit_results : bool, optional
-        return results of the circular fit, by default False
-
-    Returns
-    -------
-    mask100: numpy.ndarray
-        masked array (ie off disc region) with 100% of the radius
-    sly: slice
-        slice in y direction to be used for normalisation (ie good pixels on disc)
-    slx: slice
-        slice in x direction to be used for normalisation (ie good pixels on disc)
-    side: str
-        limb side
-    mask96: numpy.ndarray
-        masked array (ie off disc region) with 96% of the radius (only if percent = True)
-    """
-    def _residuals(p,x,y):
-        """
-        Finding the residuals of the fit
-        
-        Parameters
-        ----------
-        p : list
-            [xc,yc,R] - coordinates of the centre and radius of the circle
-        x : float
-            test x coordinate
-        y : float
-            test y coordinate
-
-        Returns
-        -------
-        residual = R**2 - (x-xc)**2 - (y-yc)**2
-        """
-        xc,yc,R = p
-        residual = R**2 - (x-xc)**2 - (y-yc)**2
-        return residual
-    
-    def _is_outlier(points, thresh=2):
-        """Returns a boolean array with True if points are outliers and False otherwise
-        
-        Parameters
-        ----------
-        points : numpy.ndarray
-            1D array of points
-        thresh : int, optional
-            threshold for outlier detection, by default 2
-        """
-        if len(points.shape) == 1:
-            points = points[:,None]
-        median = np.median(points, axis=0)
-        diff = np.sum((points - median)**2, axis=-1)
-        diff = np.sqrt(diff)
-        med_abs_deviation = np.median(diff)
-
-        modified_z_score = 0.6745 * diff / med_abs_deviation
-
-        return modified_z_score > thresh
-        
-    def _image_derivative(d):
-        """Calculates the image derivative in x and y using a 3x3 kernel
-        
-        Parameters
-        ----------
-        d : numpy.ndarray
-            image to calculate derivative of
-        
-        Returns
-        -------
-        SX : numpy.ndarray
-            derivative in x direction
-        SY : numpy.ndarray
-            derivative in y direction
-        """
-        import numpy as np
-        from scipy.signal import convolve
-        kx = np.asarray([[1,0,-1], [1,0,-1], [1,0,-1]])
-        ky = np.asarray([[1,1,1], [0,0,0], [-1,-1,-1]])
-
-        kx=kx/3.
-        ky=ky/3.
-
-        SX = convolve(d, kx,mode='same')
-        SY = convolve(d, ky,mode='same')
-
-        return SX, SY
-
-    from scipy.optimize import least_squares
-    from scipy.ndimage import binary_erosion
-
-    side, center, Rpix, sly, slx, finder_small = limb_side_finder(img,hdr,verbose=verbose,outfinder=True)
-    f = 16
-    fract = int(img.shape[0]//f)
-    finder = np.zeros(img.shape)
-    for i in range(f):
-        for j in range(f):
-            finder[fract*i:fract*(i+1),fract*j:fract*(j+1)] = finder_small[i,j]
-        
-    if side == '':
-        output = [None,sly,slx,side]
-        
-        if percent:
-            output += [None]
-        if fit_results:
-            output += [None]    
-
-        return output
-    
-    if 'N' in side or 'S' in side:
-        img = np.moveaxis(img,0,1)
-        finder = np.moveaxis(finder,0,1)
-        center = center[::-1]
-    
-    s = 5
-    thr = 3
-    
-    diff = _image_derivative(img)[0][s:-s,s:-s]
-    rms = np.sqrt(np.mean(diff[field_stop[s:-s,s:-s]>0]**2))
-    yi, xi = np.where(np.abs(diff*binary_erosion(field_stop,np.ones((2,2)),iterations=20)[s:-s,s:-s])>rms*thr)
-    tyi = yi.copy(); txi = xi.copy()
-    yi = []; xi = []
-    for i,j in zip(tyi,txi):
-        if finder[i,j]:
-            yi += [i+s]; xi += [j+s]
-    yi = np.asarray(yi); xi = np.asarray(xi)
-    
-    out = _is_outlier(xi)
-
-    yi = yi[~out]
-    xi = xi[~out]
-
-    p = least_squares(_residuals,x0 = [center[0],center[1],Rpix], args=(xi,yi),
-                              bounds = ([center[0]-150,center[1]-150,Rpix-50],[center[0]+150,center[1]+150,Rpix+50]))
-        
-    mask100 = circular_mask(img.shape[0],img.shape[1],[p.x[0],p.x[1]],p.x[2])
-
-    mask96 = circular_mask(img.shape[0],img.shape[1],[p.x[0],p.x[1]],p.x[2]*.96)
-    
-    output = [sly,slx,side]
-    if 'N' in side or 'S' in side:
-        output = [np.moveaxis(mask100,0,1)] + output
-        if percent:
-            output += [np.moveaxis(mask96,0,1)]
-    else:
-        output = [mask100] + output
-        if percent:
-            output += [mask96]
-    if fit_results:
-        output += [p]    
-
-    return output
 
 def fft_shift(img,shift):
     """Shift an image in the Fourier domain and return the shifted image (non fourier domain)
@@ -982,7 +818,7 @@ def SPG_shifts_FFT(data,norma=True,prec=100,coarse_prec = 1.5,sequential = False
         Output:
             A: 2D array with 0s and 1s
         """
-        from photutils import CircularAperture
+        from photutils.aperture import CircularAperture
         A=CircularAperture((N/2,N/2),r=R) #Circular mask (1s in and 0s out)
         A=A.to_mask(method='exact') #Mask with exact value in edge pixels
         A=A.to_image(shape=(N,N)) #Conversion from mask to image
@@ -1203,177 +1039,6 @@ def iter_noise(temp, p = [1,0,1e-1], eps = 1e-6):
             break
         it += 1
     return p, hi
-
-  
-def blos_noise(blos_file, iter=True, fs = None):
-    """plot blos on left panel, and blos hist + Gaussian fit (w/ iterative fit option - only shown in legend)
-
-    Parameters
-    ----------
-    blos_file : str
-        path to blos file
-    iter : bool, optional
-        performs iterative Gaussian fit, by default True
-    fs : array, optional
-        field stop mask, by default None
-
-    Returns
-    -------
-    p or p_iter: fit coefficients for Gaussian function
-    """
-    blos = fits.getdata(blos_file)
-    hdr = fits.getheader(blos_file)
-    #get the pixels that we want to consider (central 512x512 and limb handling)
-    _, _, _, sly, slx = limb_side_finder(blos, hdr)
-    values = blos[sly,slx]
-
-    fig, ax = plt.subplots(1,2, figsize = (14,6))
-    if fs is not None:
-        idx = np.where(fs<1)
-        blos[idx] = -300
-    im1 = ax[0].imshow(blos, cmap = "gray", origin = "lower", vmin = -200, vmax = 200)
-    fig.colorbar(im1, ax = ax[0], fraction=0.046, pad=0.04)
-    hi = ax[1].hist(values.flatten(), bins=np.linspace(-2e2,2e2,200))
-    tmp = [0,0]
-    tmp[0] = hi[0].astype('float64')
-    tmp[1] = hi[1].astype('float64')
-
-    #guassian fit + label
-    p = gaussian_fit(tmp, show = False)    
-    xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
-    lbl = f'{p[1]:.2e} $\pm$ {p[2]:.2e} G'
-    
-    if iter:
-        ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
-        try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,10.],eps=1e-4); p_iter[0] = p[0]
-            ax[1].plot(xx,gaus(xx,*p_iter),'g--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
-            # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
-        except:
-            print("Iterative Gauss Fit failed")
-            p_iter = p
-
-    else:
-        ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
-
-    ax[1].legend(fontsize=15)
-
-    date = blos_file.split('blos_')[1][:15]
-    dt_str = dt.strptime(date, "%Y%m%dT%H%M%S")
-    fig.suptitle(f"Blos {dt_str}")
-
-    plt.tight_layout()
-    plt.show()
-
-    if iter:
-        return p_iter
-    else:
-        return p
-
-
-def blos_noise_arr(blos, fs = None):
-    """
-    plot blos on left panel, and blos hist + Gaussian fit (w/ iterative option)
-
-    DEPRACATED - use blos_noise instead
-    """
-
-    fig, ax = plt.subplots(1,2, figsize = (14,6))
-    if fs is not None:
-        idx = np.where(fs<1)
-        blos[idx] = -300
-    im1 = ax[0].imshow(blos, cmap = "gray", origin = "lower", vmin = -200, vmax = 200)
-    fig.colorbar(im1, ax = ax[0], fraction=0.046, pad=0.04)
-    hi = ax[1].hist(blos.flatten(), bins=np.linspace(-2e2,2e2,200))
-    #print(hi)
-    tmp = [0,0]
-    tmp[0] = hi[0].astype('float64')
-    tmp[1] = hi[1].astype('float64')
-
-
-    #guassian fit + label
-    p = gaussian_fit(tmp, show = False)  
-    try:  
-        p_iter, hi_iter = iter_noise(blos,[1.,0.,1.],eps=1e-4)
-        ax[1].scatter(0,0, color = 'white', s = 0, label = f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e} G")
-    except:
-        print("Iterative Gauss Fit failed")
-    xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
-    lbl = f'{p[1]:.2e} $\pm$ {p[2]:.2e} G'
-    ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
-    ax[1].legend(fontsize=15)
-
-    plt.tight_layout()
-    plt.show()
-    
-
-def stokes_noise(stokes_file, iter=True):
-    """plot stokes V on left panel, and Stokes V hist + Gaussian fit (w/ iterative option)
-
-    Parameters
-    ----------
-    stokes_file : str
-        path to stokes file
-    iter : bool, optional
-        whether to use iterative Gaussian fit, by default True
-
-    Returns
-    -------
-    p or p_iter: array
-        Gaussian fit parameters
-    """
-    stokes = fits.getdata(stokes_file)
-    if stokes.shape[0] == 6:
-        stokes = np.einsum('lpyx->yxpl',stokes)
-    hdr = fits.getheader(stokes_file)
-    out = fits_get_sampling(stokes_file)
-    cpos = out[3]
-    #first get the pixels that we want (central 512x512 and limb handling)
-    _, _, _, sly, slx = limb_side_finder(stokes[:,:,3,cpos], hdr)
-    values = stokes[sly,slx,3,cpos]
-
-    fig, ax = plt.subplots(1,2, figsize = (14,6))
-    im1 = ax[0].imshow(stokes[:,:,3,cpos], cmap = "gist_heat", origin = "lower", vmin = -1e-2, vmax = 1e-2)
-    fig.colorbar(im1, ax = ax[0], fraction=0.046, pad=0.04)
-    hi = ax[1].hist(values.flatten(), bins=np.linspace(-1e-2,1e-2,200))
-    #print(hi)
-    tmp = [0,0]
-    tmp[0] = hi[0].astype('float64')
-    tmp[1] = hi[1].astype('float64')
-
-    #guassian fit + label
-    p = gaussian_fit(tmp, show = False)    
-    xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
-    lbl = f'{p[1]:.2e} $\pm$ {p[2]:.2e}'
-    
-    if iter:
-        ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
-        try:
-            p_iter, hi_iter = iter_noise(values,[1.,0.,.1],eps=1e-6); p_iter[0] = p[0]
-            ax[1].plot(xx,gaus(xx,*p_iter),'g--', label= f"Iter Fit: {p_iter[1]:.2e} $\pm$ {p_iter[2]:.2e}")
-            # ax[1].scatter(0,0, color = 'white', s = 0, label = lbl) #also display the original fit in legend
-        except:
-            print("Iterative Gauss Fit failed")
-            ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
-            p_iter = p
-
-    else:
-        ax[1].plot(xx,gaus(xx,*p),'r--', label=lbl)
-
-    ax[1].legend(fontsize=15)
-
-    date = stokes_file.split('stokes_')[1][:15]
-    dt_str = dt.strptime(date, "%Y%m%dT%H%M%S")
-    fig.suptitle(f"Stokes {dt_str}")
-
-    plt.tight_layout()
-    plt.show()
-
-    if iter:
-        return p_iter
-    else:
-        return p
-
 
 ########### new WCS script 3/6/2022 ###########
 def image_derivative(d):
