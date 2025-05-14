@@ -1401,9 +1401,9 @@ def phihrt_pipe(input_json_file):
             hdr_arr[count]['HISTORY'] = f"Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {ItoQUV}. PSF deconvolution: {hdr_arr[count]['CAL_PSF']}. Cavity correction: {cavity_c}"
             
             if out_ancillary and out_unreconstructed and PSFstokes['deconvolution']:
-                hdr_arr[scan].set('UNRECONS', unrec_f, 'filename of the unreconstructed Stokes vector', after='PARENT')
-                hdr_arr[scan].set('ANCILLAR', anc_f, 'filename of the ancillary file where the PSF is stored', after='UNRECONS')
-                hdr_arr[scan]['HISTORY'] = "The unreconstructed Stokes vector and the ancillary file are stored in the file reported in UNRECONS and ANCILLAR keywords"
+                hdr_arr[count].set('UNRECONS', unrec_f, 'filename of the unreconstructed Stokes vector', after='PARENT')
+                hdr_arr[count].set('ANCILLAR', anc_f, 'filename of the ancillary file where the PSF is stored', after='UNRECONS')
+                hdr_arr[count]['HISTORY'] = "The unreconstructed Stokes vector and the ancillary file are stored in the file reported in UNRECONS and ANCILLAR keywords"
                 
             with fits.open(scan) as hdu_list:
                 print(f"Writing out stokes file as: {stokes_file}")
