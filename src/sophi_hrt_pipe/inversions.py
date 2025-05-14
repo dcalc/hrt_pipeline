@@ -392,7 +392,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
     else:
         cmd = ''
     
-    ref_wavelength = 6173.341 # mA
+    ref_wavelength = 6173.341 # AA
     
     for scan in range(int(data_shape[-1])):
         printc(f'  ---- >>>>> Data scan number: {scan} .... ',color=bcolors.OKGREEN)
@@ -705,3 +705,29 @@ def cog(input_data,wave,wave_axis,lande_factor = 0,cpos = 0, verbose = False):
     else:
         print('No input data or wrong dimentions',ndim)
         return
+
+def CE_output(data, wave_axis, cpos):
+    """
+    Generates the output of the CE inversion.
+    Parameters
+    ----------
+    data : ndarray
+        The data array.
+    wave_axis : ndarray
+        The wavelength axis.
+    cpos : int
+        The continuum position.
+    Returns
+    -------
+    The output of the CE inversion.
+    """
+    temp = data.copy()
+    if temp.shape[0] != len(wave_axis):
+        temp = np.einsum('yxpl->lpyx',temp)
+    if cpos == 0: core = 3
+    elif cpos == 5: core = 2
+    ref_wavelength = 6173.341 # AA
+
+    out_ce = pym.phi_rte(temp,wave_axis - wave_axis[core] + ref_wavelength,'CE')
+
+    return out_ce

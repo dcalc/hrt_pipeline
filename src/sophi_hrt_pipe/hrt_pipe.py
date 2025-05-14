@@ -12,7 +12,7 @@ from .utils import printc, bcolors, get_data, fits_get_sampling, check_size, che
 
 from .processes import setup_header, apply_dark_correction, load_and_process_flat, prefilter_correction, prefilter_correction_WLS, normalise_flat, unsharp_masking, flat_correction, apply_field_stop, hot_pixel_mask, load_ghost_field_stop, polarimetric_registration, wavelength_registration, demod_hrt, crosstalk_2D_ItoQUV, crosstalk_auto_VtoQU, CT_VtoQU, write_out_intermediate, data_hdr_kw, limb_ellipse, average_registration
 
-from .inversions import generate_l2, create_output_filenames, cog
+from .inversions import generate_l2, create_output_filenames, CE_output
 from .coordinates import muSO_map
 from .hrt_fdt_wcs_correction import run_FDT_correction, get_descriptor
 from .hrt_fdt_wcs_correction import VERSION as wcs_version
@@ -122,7 +122,7 @@ def phihrt_pipe(input_json_file):
     pipeline_dir = os.path.realpath(__file__).split('src/')[0]
     repo = git.Repo(pipeline_dir)
     sha = repo.head.object.hexsha
-    version = 'V1.9.3 March 5th 2025'
+    version = 'V1.9.4 May 14th 2025'
 
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
     printc('PHI HRT data reduction software  ',bcolors.OKGREEN)
@@ -344,7 +344,7 @@ def phihrt_pipe(input_json_file):
             # hdr_arr[scan].comments['WAVEMIN'] = '[nm] min wavelength of observation'
             # hdr_arr[scan].comments['WAVEMAX'] = '[nm] max wavelength of observation'
 
-            hdr_arr[scan].set('PHIDTYPE', get_descriptor(data_f,'hrt'), 'PHI internal data type/name', after='DATAMAX')
+            hdr_arr[scan].set('PHIDTYPE', get_descriptor(data_f[scan],'hrt'), 'PHI internal data type/name', after='DATAMAX')
 
         #--------
         # check if ISS is ON or OFF
@@ -1185,8 +1185,8 @@ def phihrt_pipe(input_json_file):
     if wcs_update:
         for scan in range(data_shape[-1]):
             htemp = hdr_arr[scan].copy()
-            # htemp['FILENAME'] = blos_file
-            _, im = cog(np.moveaxis(data[...,scan].copy(), [-1,-2], [0,1]),wave_axis_arr[scan][cpos_arr[scan]-3],wave_axis_arr[scan], 2.5, cpos_arr[scan])
+            out_ce = CE_output(data[...,scan].copy(), wave_axis_arr[scan], cpos_arr[scan])
+            im = out_ce[2]*np.cos(out_ce[3]*np.pi/180); del out_ce
             if wcs_update.lower() == 'fdt':
                 printc('-->>>>>>> Running FDT WCS correction on the BLOS file',bcolors.OKGREEN)
                 new_wcs = run_FDT_correction(im*limb_mask[...,scan], htemp, False)
