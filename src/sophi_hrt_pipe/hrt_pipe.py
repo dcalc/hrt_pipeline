@@ -1189,7 +1189,7 @@ def phihrt_pipe(input_json_file):
             im = out_ce[2]*np.cos(out_ce[3]*np.pi/180); del out_ce
             if wcs_update.lower() == 'fdt':
                 printc('-->>>>>>> Running FDT WCS correction on the BLOS file',bcolors.OKGREEN)
-                new_wcs = run_FDT_correction(im*limb_mask[...,scan], htemp, False)
+                new_wcs = run_FDT_correction(im*limb_mask[...,scan], htemp, False, print_values=True)
             
             for k,v in new_wcs.items():
                 if v[0] is not None:

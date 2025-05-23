@@ -16,7 +16,7 @@ from astropy import units as u
 
 warnings.filterwarnings("ignore", category=sunpy.util.SunpyMetadataWarning)
 
-VERSION = '1.0'
+VERSION = '1.0.1'
 
 def get_descriptor(filename, telescope='hrt'):
     descriptor = filename.split('phi-{0}-'.format(telescope))[1].split('_')[0]
@@ -106,7 +106,7 @@ def prepare_data(hrt_file, fdt_file, crota_manual_correction=0.15, undistortion=
 
     if 'CAL_LIMB' in h_hrt:
         p = np.asarray(eval(h_hrt['CAL_LIMB']))
-        n_erosion = 7
+        n_erosion = 3
         p[0] -= n_erosion; p[1] -= n_erosion # reducing the axis of the ellipse
         ell = elliptical_mask(hrt.shape, p)
         printc(f'Masking out {n_erosion} pixels from the limb',bcolors.WARNING)
@@ -252,12 +252,18 @@ def correction(hrt_map, fdt_map, deriv=False,verbose=False,max_iterations = 10):
     ht['DATE-OBS'] = h_hrt['DATE-OBS']
     hrt_map = sunpy.map.Map((und_hrt,ht))     
 
-    newWCS = dict(DID=ht['PHIDATID'], 
-                  CROTA=ht['CROTA'], PC1_1=ht['PC1_1'], PC1_2=ht['PC1_2'], PC2_1=ht['PC2_1'], PC2_2=ht['PC2_2'],
-                  CRPIX1=ht['CRPIX1'], CRPIX2=ht['CRPIX2'], 
-                  CRVAL1=ht['CRVAL1'], CRVAL2=ht['CRVAL2'])
+    if match:
+        newWCS = dict(DID=ht['PHIDATID'], 
+                    CROTA=ht['CROTA'], PC1_1=ht['PC1_1'], PC1_2=ht['PC1_2'], PC2_1=ht['PC2_1'], PC2_2=ht['PC2_2'],
+                    CRPIX1=ht['CRPIX1'], CRPIX2=ht['CRPIX2'], 
+                    CRVAL1=ht['CRVAL1'], CRVAL2=ht['CRVAL2'])
+    else:
+        newWCS = dict(DID=None,
+                    CROTA=None, PC1_1=None, PC1_2=None, PC2_1=None, PC2_2=None,
+                    CRPIX1=None, CRPIX2=None, 
+                    CRVAL1=None, CRVAL2=None)    
     
-    return hrt_map, hrt_remap, newWCS, t0, match
+    return hrt_map, hrt_remap, newWCS, t0
 
 def plot_fdt_hrt(fdt_map, hrt_map):
     fig = plt.figure(layout='tight',figsize=(7,7))
@@ -342,7 +348,7 @@ def run_FDT_correction(data, header, verbose = False, **kwargs):
             hrt_map, fdt_map, fdt_map_rot = prepare_data((data,header), fdt_filename, 0.15, undistortion=False, verbose=False)
 
         try:
-            hrt_map, hrt_remap, n, t0, match = correction(hrt_map, fdt_map_rot, deriv=False,verbose=False)
+            hrt_map, hrt_remap, n, t0 = correction(hrt_map, fdt_map_rot, deriv=False,verbose=False)
         except Exception as e:
             printc(f"There was an error in the WCS correction, return None. This is the error: {e}", color=bcolors.FAIL)
             for key in newWCS.keys():
