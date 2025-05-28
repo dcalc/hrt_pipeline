@@ -252,7 +252,12 @@ def correction(hrt_map, fdt_map, deriv=False,verbose=False,max_iterations = 10):
     ht['DATE-OBS'] = h_hrt['DATE-OBS']
     hrt_map = sunpy.map.Map((und_hrt,ht))     
 
-    if match:
+    if match:# or np.any(np.abs(s)<0.5):
+        newWCS = dict(DID=ht['PHIDATID'], 
+                    CROTA=ht['CROTA'], PC1_1=ht['PC1_1'], PC1_2=ht['PC1_2'], PC2_1=ht['PC2_1'], PC2_2=ht['PC2_2'],
+                    CRPIX1=ht['CRPIX1'], CRPIX2=ht['CRPIX2'], 
+                    CRVAL1=ht['CRVAL1'], CRVAL2=ht['CRVAL2'])
+    elif 'CAL_LIMB' in ht:
         newWCS = dict(DID=ht['PHIDATID'], 
                     CROTA=ht['CROTA'], PC1_1=ht['PC1_1'], PC1_2=ht['PC1_2'], PC2_1=ht['PC2_1'], PC2_2=ht['PC2_2'],
                     CRPIX1=ht['CRPIX1'], CRPIX2=ht['CRPIX2'], 
@@ -286,17 +291,6 @@ def plot_fdt_hrt(fdt_map, hrt_map):
     return fig, ax
 
 def run_FDT_correction(data, header, verbose = False, **kwargs):
-# if __name__ == '__main__':
-#     parser = argparse.ArgumentParser(description='Filename (with path)')
-#     parser.add_argument('filename', type=str, help='The name of the file to correct or directory with wildcard')
-#     parser.add_argument('-v','--verbose', action='store_true',help='plot corrected images if true')
-
-#     args = parser.parse_args()
-    
-#     verbose = args.verbose
-#     filename = args.filename
-    
-    # filename can be a string with wildcard or directory path
 
     parameters = dict(filename = None, print_values = False)
     parameters = {**parameters, **kwargs}
@@ -359,6 +353,8 @@ def run_FDT_correction(data, header, verbose = False, **kwargs):
             for e,v in zip(ends,n.values()):
                 if isinstance(v,str):
                     cols += v+e
+                elif v is None:
+                    cols += 'None'+e
                 else:
                     cols += '{:{width}.{prec}f}'.format(v,width=5,prec=3)+e
         

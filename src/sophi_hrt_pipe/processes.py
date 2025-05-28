@@ -914,6 +914,10 @@ def crosstalk_2D_ItoQUV(data: np.ndarray,
         # else:
         idx = (xI != 0) & (xI > (lower_threshold/100. * norma))
 
+        if len(idx) < 10:
+            printc('Not enough data points for cross-talk fit. Returning zeros.', color=bcolors.WARNING)
+            return np.zeros(2), np.zeros(2), np.zeros(2)
+        
         xI = xI[idx]
         yQ = yQ[idx]
         yU = yU[idx]
@@ -1929,7 +1933,7 @@ def limb_ellipse(img, hdr, field_stop, AR_mask, verbose=True, percent=False, fit
 
     s = 5
     temp = img.copy()[s:-s,s:-s][AR_mask[s:-s,s:-s]>0].flatten()
-    hi = np.histogram(temp,bins=np.linspace(0,temp.max(),100)); del temp
+    hi = np.histogram(temp,bins=np.linspace(-temp.max()/50,temp.max(),100)); del temp
     gres, cov = double_gaussian_fit(hi,False,True,4)
     
     if (np.any((np.sqrt(np.diagonal(cov))/gres)[:3] > 100) or np.any(np.isnan(cov))) or gres[1] > gres[4]*0.7: # sometimes south pole limb is not found, so extra condition on fit
