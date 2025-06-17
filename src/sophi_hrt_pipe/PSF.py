@@ -72,8 +72,8 @@ def corr(f,g,norma=False):
     """
 
     n=f.shape[1]
-    F=fft2(f)
-    G=fft2(g)
+    F=fft2(f.astype('float64'))
+    G=fft2(g.astype('float64'))
     power=n*n*np.conj(F)*G #Normalized correlation
     c=ifft2(power)
     norma_corr=np.abs(c[0,0])
@@ -381,7 +381,7 @@ def aperture(N,R,cobs=0,spider=0):
         nC=np.where(nC<=0,0,nC)
         A = A - nC
         A = np.where(A<=0,0,A)
-    return A
+    return A.astype('float64')
 
 def radialpol(m,n,rho):
     """
@@ -430,7 +430,7 @@ def zernike(m,n,rho,theta):
 
     Z=np.roll(Z, 1, axis=1)
     Z=np.roll(Z, 1, axis=0)
-    return Z
+    return Z.astype('float64')
 
 def zernikej_Noll(j,rho,theta):
     """
@@ -444,7 +444,7 @@ def zernikej_Noll(j,rho,theta):
     m=zernike_equiv[j-1,1]
     n=zernike_equiv[j-1,2]
     zj=zernike(m,n,rho,theta)
-    return zj
+    return zj.astype('float64')
 
 def pupil(a,a_d,RHO,THETA,A):
     """
@@ -547,7 +547,7 @@ def OTF(a,a_d,RHO,THETA,ap,norm=None,K=2,tiptilt=True,straylight_corr=True):
                 otf=otf/norma #Normalization of the OTF
         elif np.ndim(a) == 2: # PSF given as input
             # PSF to OTF
-            otf = ifftshift(fft2(a))
+            otf = ifftshift(fft2(a.astype('float64')))
             if norm==True:
                 norma = fftshift(otf)[0,0]
                 otf=otf/norma
@@ -1076,7 +1076,7 @@ def stokes_restoration(stokes_data,coefs,sly = slice(0,2048), slx = slice(0,2048
                         im0_roi = np.pad(im0_roi, pad_width=((pad_width_roi, pad_width_roi), (pad_width_roi, pad_width_roi)),\
                                       mode='symmetric')
                         noise=object_estimate(im0_roi,coefs,0,reg=gamma2,wind=wind_opt,low_f=low_f,noise=noise,aberr_cor=aberr_cor,straylight_corr=straylight_corr)[2]
-                        noise = cv2.resize(noise.astype('float32'),im0.shape,interpolation=cv2.INTER_LANCZOS4)
+                        noise = cv2.resize(noise.astype('float32'),im0.shape,interpolation=cv2.INTER_LANCZOS4).astype('float64')
                 else:
                     noise=noise_filt #To use always the same noise_filt (I at continuum)   
                 
