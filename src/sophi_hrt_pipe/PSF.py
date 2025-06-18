@@ -72,8 +72,8 @@ def corr(f,g,norma=False):
     """
 
     n=f.shape[1]
-    F=fft2(f.astype('float64'))
-    G=fft2(g.astype('float64'))
+    F=fft2(f)
+    G=fft2(g)
     power=n*n*np.conj(F)*G #Normalized correlation
     c=ifft2(power)
     norma_corr=np.abs(c[0,0])
