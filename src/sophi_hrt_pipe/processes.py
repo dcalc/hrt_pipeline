@@ -914,7 +914,7 @@ def crosstalk_2D_ItoQUV(data: np.ndarray,
         # else:
         idx = (xI != 0) & (xI > (lower_threshold/100. * norma))
 
-        if len(idx) < 10:
+        if len(idx) < 10 or xI.size < 10:
             printc('Not enough data points for cross-talk fit. Returning zeros.', color=bcolors.WARNING)
             return np.zeros(2), np.zeros(2), np.zeros(2)
         
@@ -928,6 +928,10 @@ def crosstalk_2D_ItoQUV(data: np.ndarray,
         yP = np.sqrt(yQ**2 + yU**2 + yV**2)
         idx = yP < (threshold/100. * norma)
         # plt.figure(); plt.hist(yP,100); plt.axvline((threshold/100. * norma),color='r'); plt.show()
+        if len(idx) < 10 or xI.size < 10:
+            printc('Not enough data points for cross-talk fit. Returning zeros.', color=bcolors.WARNING)
+            return np.zeros(2), np.zeros(2), np.zeros(2)
+        
         xI = xI[idx]
         yQ = yQ[idx]
         yU = yU[idx]
