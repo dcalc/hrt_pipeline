@@ -588,9 +588,17 @@ def prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_fli
     pf61_f = prefilter_f+'PF_transmittance_61deg_20240710_V20241213.fits'
     pf66_f = prefilter_f+'PF_transmittance_66deg_20240710_V20241213.fits'
 
+    # pf56_f = prefilter_f+'PF_transmittance_hrt_cavity_add_56deg_20240710_V20250604.fits'
+    # pf61_f = prefilter_f+'PF_transmittance_hrt_cavity_add_61deg_20240710_V20250604.fits'
+    # pf66_f = prefilter_f+'PF_transmittance_hrt_cavity_add_66deg_20240710_V20250604.fits'
+    # pf56_f = prefilter_f+'PF_transmittance_hrt_cavity_subtraction_56deg_20240710_V20250604.fits'
+    # pf61_f = prefilter_f+'PF_transmittance_hrt_cavity_subtraction_61deg_20240710_V20250604.fits'
+    # pf66_f = prefilter_f+'PF_transmittance_hrt_cavity_subtraction_66deg_20240710_V20250604.fits'
+
     wl56_f = prefilter_f+'Wavelength_axis_PF_transmittance_56deg_20240710_V20241213.fits'
     wl61_f = prefilter_f+'Wavelength_axis_PF_transmittance_61deg_20240710_V20241213.fits'
     wl66_f = prefilter_f+'Wavelength_axis_PF_transmittance_66deg_20240710_V20241213.fits'
+    
     
     if int(round(Tetalon)) == 56:
         prefilter = fits.getdata(pf56_f) # (51,2048,2048)
@@ -2248,11 +2256,15 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr, derivative = True
 
         if deconv != False and isinstance(deconv, dict):
             if deconv['deconvolution']:
+                if deconv['auto']:
+                    PSFt = [datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']),hdr_arr[scan]['DSUN_AU'], np.sign(hdr_arr[scan]['OBS_VR'])]
+                else:
+                    PSFt = datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS'])
                 from sophi_hrt_pipe.PSF import fran_restore
                 dat = data[sly.start-5:sly.stop+5,slx.start-5:slx.stop+5,:,:,scan].copy()
                 # old_data, _ = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']),
                 #                             mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0.02, low_f=0.8, aberr_cor=False)
-                old_data, _, _ = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), 
+                old_data, _, _ = fran_restore(dat, PSFt, 
                                               sly=slice(0,dat.shape[0]), slx=slice(0,dat.shape[1]),
                                               mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0, low_f=0.1, aberr_cor=False, 
                                               PD_f=deconv['PD_f'], straylight_corr=deconv['straylight_correction'])

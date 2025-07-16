@@ -189,7 +189,8 @@ def phihrt_pipe(input_json_file):
                             'gamma2':0.02,
                             'low_f':0.8,
                             'roi':False,
-                            'method':'lofdahl'}
+                            'method':'lofdahl',
+                            'auto':False}
         if isinstance(input_dict['PSFstokes'],dict):
             PSFstokes = {**PSFstokes_default, **input_dict['PSFstokes']}
             del PSFstokes_default
@@ -1087,15 +1088,20 @@ def phihrt_pipe(input_json_file):
             if cpos_arr[scan] == 5: # set continuum in the first wavelength for the deconvolution
                 data[...,scan] = np.roll(data[...,scan], 1, axis = -1)
             
+            if PSFstokes['auto']:
+                PSFt = [datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']),hdr_arr[scan]['DSUN_AU'], np.sign(hdr_arr[scan]['OBS_VR'])]
+            else:
+                PSFt = datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS'])
+
             if cavity_c:
-                restore_results = fran_restore(data[...,scan], datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), 
+                restore_results = fran_restore(data[...,scan], PSFt, 
                                                rest=PSFstokes['method'], mask=mask, sly=psfy, slx=psfx,
                                                gamma2=PSFstokes['gamma2'], low_f=PSFstokes['low_f'], 
                                                aberr_cor=PSFstokes['aberration_correction'], straylight_corr=PSFstokes['straylight_correction'],
                                                cavity=cavity[rows,cols], PD_f = PSFstokes['PD_f'])
                 res_stokes, coefs, PSF, cavity = restore_results
             else:
-                restore_results = fran_restore(data[...,scan], datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']), rest=PSFstokes['method'], mask=mask, sly=psfy, slx=psfx,
+                restore_results = fran_restore(data[...,scan], PSFt, rest=PSFstokes['method'], mask=mask, sly=psfy, slx=psfx,
                                              gamma2=PSFstokes['gamma2'], low_f=PSFstokes['low_f'], aberr_cor=PSFstokes['aberration_correction'],
                                              straylight_corr=PSFstokes['straylight_correction'], 
                                              cavity=None, PD_f = PSFstokes['PD_f'])
