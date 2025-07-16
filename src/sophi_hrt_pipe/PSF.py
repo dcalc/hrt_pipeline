@@ -1171,6 +1171,28 @@ def edge_masking(stokes, mask, cavity=None):
 
 def extract_coefs(tobs,PD_f = '/data/slam/home/calchetti/hrt_pipeline/csv/PD_result.csv', radians = True, verbose = True):
     import csv
+    if isinstance(tobs,list):
+        # here tobs is [DATE-OBS, DSUN_AU, sign(OBS_VR)]
+        print('Fitting the Z4, Z6, Z10, and Z11 coefficeints at a distance of', tobs[1]*tobs[2], 'au from the Sun')
+        exp_func = lambda x,a,b,c: a * np.exp(-b * x) + c
+        if tobs[2] < 0:
+            fit_Z4=[4.31393472, 5.04119823, -0.08043414]
+            fit_Z6=[-0.10998819, 0.1875804]
+            fit_Z10=[0.01517192, -0.93187035, 0.70991049]
+            fit_Z11=[1.90409535, 5.79110494, 0.01167675]
+        else:
+            fit_Z4=[8.61550132, 8.31999155, 0.2631551 ]
+            fit_Z6=[-0.25876416, 0.18856071]
+            fit_Z10=[-0.62410732, 0.70570757]
+            fit_Z11=[1.7441684, 5.84182432, 0.0620181 ]
+
+            Z4=exp_func(tobs[1],fit_Z4[0],fit_Z4[1],fit_Z4[2])
+            Z6=np.poly1d(fit_Z6)(tobs[1])
+            Z10=np.poly1d(fit_Z10)(tobs[1])
+            Z11=exp_func(tobs[1],fit_Z11[0],fit_Z11[1],fit_Z11[2])
+        if isinstance(tobs[0],str):
+            tobs[0] = datetime.datetime.fromisoformat(tobs[0])
+
     if isinstance(tobs,str):
         tobs = datetime.datetime.fromisoformat(tobs)
     if radians:
@@ -1189,9 +1211,20 @@ def extract_coefs(tobs,PD_f = '/data/slam/home/calchetti/hrt_pipeline/csv/PD_res
         elif 'Z' in row[0]:
             Z[row[0]] = np.asarray([float(z) * converter for z in row[1:]]) # *2*npi to convert to radians
 
-    idx = np.argmin([abs(tobs - t) for t in dates])
-
-    coefs = [Z[k][idx] for k in Z.keys()]
+    if isinstance(tobs,list):
+        # idx = np.argmin([abs(tobs[0] - t) for t in dates])
+        # coefs = [np.mean(Z[k][max(idx-3,0):min(idx+4,len(Z[k]))]) for k in Z.keys()] # mean of the (idx-3:idx+3) values
+        # average of all the values from 2023 onwards
+        idx = next((i for i, date in enumerate(dates) if date.year == 2023), 15) # select the index of the first date in 2023
+        coefs = [np.mean(Z[k][idx:]) for k in Z.keys()]
+        # coefs = [Z[k][idx] for k in Z.keys()]
+        coefs[3] = Z4
+        coefs[5] = Z6
+        coefs[9] = Z10
+        coefs[10] = Z11
+    else:
+        idx = np.argmin([abs(tobs - t) for t in dates])
+        coefs = [Z[k][idx] for k in Z.keys()]
 
     #Zernike coefficients (in radians), starting from Z1 (offset)
     coefs=np.array(coefs) #Convert into numpy array
