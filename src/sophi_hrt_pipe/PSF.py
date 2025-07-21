@@ -1173,7 +1173,7 @@ def extract_coefs(tobs,PD_f = '/data/slam/home/calchetti/hrt_pipeline/csv/PD_res
     import csv
     if isinstance(tobs,list):
         # here tobs is [DATE-OBS, DSUN_AU, sign(OBS_VR)]
-        print('Fitting the Z4, Z6, Z10, and Z11 coefficeints at a distance of', tobs[1]*tobs[2], 'au from the Sun')
+        print('Fitting the Z4, Z6, Z10, and Z11 coefficients at a distance of', round(tobs[1]*tobs[2],3), 'au from the Sun')
         exp_func = lambda x,a,b,c: a * np.exp(-b * x) + c
         if tobs[2] < 0:
             fit_Z4=[4.31393472, 5.04119823, -0.08043414]
@@ -1218,10 +1218,10 @@ def extract_coefs(tobs,PD_f = '/data/slam/home/calchetti/hrt_pipeline/csv/PD_res
         idx = next((i for i, date in enumerate(dates) if date.year == 2023), 15) # select the index of the first date in 2023
         coefs = [np.mean(Z[k][idx:]) for k in Z.keys()]
         # coefs = [Z[k][idx] for k in Z.keys()]
-        coefs[3] = Z4
-        coefs[5] = Z6
-        coefs[9] = Z10
-        coefs[10] = Z11
+        coefs[3] = Z4 * converter
+        coefs[5] = Z6 * converter
+        coefs[9] = Z10 * converter
+        coefs[10] = Z11 * converter
     else:
         idx = np.argmin([abs(tobs - t) for t in dates])
         coefs = [Z[k][idx] for k in Z.keys()]
