@@ -1193,10 +1193,14 @@ def phi_disambig(bazi,bamb,method=2):
         bazi = fits.getdata(bazi)
     if type(bamb) is str:
         bamb = fits.getdata(bamb)
-    
-    disambig = bamb[0]/2**method
+    #      
+    #flag=int.from_bytes(bamb[0,:,:], "little", signed=False)
+    flag=bamb[0,:,:] 
+    #
+    #disambig = flag/(2**method)
+    disambig = flag >> method # x shifted right by n bits as from https://docs.python.org/3/library/stdtypes.html
     disbazi = bazi.copy()
     disbazi[disambig%2 != 0] += 180
-    
+    #
     return disbazi
 
