@@ -1186,10 +1186,11 @@ def extract_coefs(tobs,PD_f = '/data/slam/home/calchetti/hrt_pipeline/csv/PD_res
             fit_Z10=[-0.62410732, 0.70570757]
             fit_Z11=[1.7441684, 5.84182432, 0.0620181 ]
 
-            Z4=exp_func(tobs[1],fit_Z4[0],fit_Z4[1],fit_Z4[2])
-            Z6=np.poly1d(fit_Z6)(tobs[1])
-            Z10=np.poly1d(fit_Z10)(tobs[1])
-            Z11=exp_func(tobs[1],fit_Z11[0],fit_Z11[1],fit_Z11[2])
+        Z4=exp_func(tobs[1],fit_Z4[0],fit_Z4[1],fit_Z4[2])
+        Z6=np.poly1d(fit_Z6)(tobs[1])
+        Z10=np.poly1d(fit_Z10)(tobs[1])
+        Z11=exp_func(tobs[1],fit_Z11[0],fit_Z11[1],fit_Z11[2])
+        
         if isinstance(tobs[0],str):
             tobs[0] = datetime.datetime.fromisoformat(tobs[0])
 
