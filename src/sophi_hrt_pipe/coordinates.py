@@ -505,7 +505,7 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
         return hmi_map
 
 
-def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undistortion = False, logpol=False, allDID=False,verbose=False, deriv = True, values_only = False, subregion = None, crota_manual_correction = 0.15, hmi_file = None):
+def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undistortion = False, allDID=False,verbose=False, deriv = True, values_only = False, subregion = None, crota_manual_correction = 0.15, hmi_file = None):
     """This function saves new version of the fits file with updated WCS.
     It works by correlating HRT data on remapped HMI data. 
     This function exports the nearest HMI data from JSOC. [Not downloaded to out_dir]
@@ -529,8 +529,6 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
         type of remapping procedure. 'remap' uses the reprojection algorithm by DeForest, 'ccd' uses a coordinate translation from HMI to HRT based on function in this file (not working yet). DEFAULT: 'remap'
     undistortion: bool
         if True, HRT will be undistorted (DEFAULT: False).
-    logpol: bool
-        (DEPRECATED) if True, log-polar transform applied until agnle smaller than a threshold (DEFAULT: False).
     allDID: bool
         if True, all the fits file with the same DID in the directory of the input file will be saved with the new WCS.
     verbose: bool
@@ -548,7 +546,7 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
     ht: astropy.io.fits.header.Header
         new header for hrt
     """
-    import sunpy, imreg_dft
+    import sunpy
     import sunpy.map
     from sunpy.coordinates import propagate_with_solar_surface
     # from reproject import reproject_interp, reproject_adaptive
@@ -703,33 +701,23 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
             shift = [0,0]
             it = 0
 
-            if abs(angle)>1e-2 and logpol:
-                r = imreg_dft.similarity(ref.copy(),temp.copy(),numiter=3,constraints=dict(scale=(1,0)))
-                shift = r['tvec']; angle = r['angle']
-                hmi_map_shift = imreg_dft.transform_img(hmi_map_wcs.data,scale=1,angle=angle,tvec=shift)
-                hmi_map_shift = sunpy.map.Map((hmi_map_shift,hmi_map_wcs.fits_header))
-                print('logpol transform shift (x,y):',round(shift[1],2),round(shift[0],2),'angle (deg):',round(angle,3))
-
-                ht = translate_header(rotate_header(ht.copy(),-angle),shift,mode='crval')
-
-            else:
-                while np.any(np.abs(s)>1e-2) and it<10:
-                    if it == 0 and ~logpol:
-                        _,s = image_register(ref,temp,False,deriv)
-                        if np.any(np.abs(s)==0):
-                            _,s = image_register(ref,temp,True,deriv)
-                    else:
+            while np.any(np.abs(s)>1e-2) and it<10:
+                if it == 0:
+                    _,s = image_register(ref,temp,False,deriv)
+                    if np.any(np.abs(s)==0):
                         _,s = image_register(ref,temp,True,deriv)
-                        # sr, sc, _ = SPG_shifts_FFT(np.asarray([ref,temp])); s = [sr[1],sc[1]]
-                    shift = [shift[0]+s[0],shift[1]+s[1]]
-                    # temp = fft_shift(hmi_map_wcs.data.copy(), shift); temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
-                    temp = fft_shift(hmi_remap.data.copy(), shift)[slyhmi,slxhmi]; temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
-                    it += 1
-                    
-                hmi_map_shift = sunpy.map.Map((temp,hmi_map_wcs.fits_header))
+                else:
+                    _,s = image_register(ref,temp,True,deriv)
+                    # sr, sc, _ = SPG_shifts_FFT(np.asarray([ref,temp])); s = [sr[1],sc[1]]
+                shift = [shift[0]+s[0],shift[1]+s[1]]
+                # temp = fft_shift(hmi_map_wcs.data.copy(), shift); temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
+                temp = fft_shift(hmi_remap.data.copy(), shift)[slyhmi,slxhmi]; temp[np.isinf(temp)] = 0; temp[np.isnan(temp)] = 0
+                it += 1
+                
+            hmi_map_shift = sunpy.map.Map((temp,hmi_map_wcs.fits_header))
 
-                ht = translate_header(ht.copy(),np.asarray(shift),mode='crval')
-                print(it,'iterations shift (x,y):',round(shift[1],2),round(shift[0],2))
+            ht = translate_header(ht.copy(),np.asarray(shift),mode='crval')
+            print(it,'iterations shift (x,y):',round(shift[1],2),round(shift[0],2))
 
             i+=1
             if i == 10:
