@@ -1,7 +1,7 @@
 import numpy as np
 from astropy.io import fits
-from .utils import printc, bcolors, ARmasking, cavity_shifts, gaussian_fit
-from .processes import data_hdr_kw
+from .utils import printc, bcolors, ARmasking, gaussian_fit
+from .processes import data_hdr_kw, load_cavity
 import os
 import time
 import subprocess
@@ -405,7 +405,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
         
         if cavity_f is not None:
             printc("  ---- >>>>> Correcting wavelengths for Cavity Maps shifts: .... ",color=bcolors.OKGREEN)
-            cavity = cavity_shifts(cavity_f,wave_axis,rows,cols,False)
+            cavity = load_cavity(cavity_f,wave_axis,1,rows,cols,False)
         else:
             cavity = np.empty([], dtype=float)
 

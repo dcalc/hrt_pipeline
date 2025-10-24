@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, label, binary_fill_holes, binary_dilation
 from matplotlib import pyplot as plt
 import datetime
 from astropy.io import fits
@@ -80,7 +80,117 @@ def data_hdr_kw(hdr, data):
     return hdr
 
 
-def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, header_imgdirx_exists, imgdirx_flipped, cpos_arr,pmp_temp) -> np.ndarray:
+def binningFunction(data, binf, crop = True, apod='cosine', apc = 2, fourier='cosine', fpc = 5, shift=True):
+    """
+    Binning function to bin the data by a factor binf.
+    Parameters
+    ----------
+    data: ndarray
+        input data to be binned. Accepted shapes: (N,y,x) or (y,x)
+    binf: int
+        binning factor, must be an even number
+    crop: bool
+        if True, uses Fourier cropping. If False, it uses cv2.resize 
+    apod: str
+        apodization type for the data, options are 'cosine' or 'none', DEFAULT = 'cosine'
+    apc: int
+        percentage of the image to be apodized, DEFAULT = 2; recommended values are 1, 2, 3
+    fourier: str
+        apodization type for the Fourier transform, options are 'cosine' or 'none', DEFAULT = 'cosine'
+    fpc: int
+        percentage of the Fourier image to be apodized, DEFAULT = 5; recommended values are 3, 5, or 10
+    shift: bool
+        if True, apply a shift to the binned image, DEFAULT = True
+    
+    Returns
+    -------
+    binnedData: ndarray
+        binned data
+    fourierMask: ndarray
+        Fourier mask used for the binning
+    """
+    try:
+        import pyfftw.interfaces.numpy_fft as fft
+    except:
+        from numpy import fft
+    
+    sz = data.shape # shape of original data
+    ds = int(sz[-1]/binf/2) # half size of the binned dataset
+    cen = int(sz[-1]//2) # center of the image
+    ndim = data.ndim
+    
+    if ndim == 3:
+        binnedData = np.zeros((sz[0],ds*2,ds*2))
+    else:
+        binnedData = np.zeros((ds*2,ds*2))
+    
+    if crop:
+        if apod == 'cosine':
+        # data apodization (2 x apc%) if apod == 'cosine', otherwise no apodization
+            x = np.ones(sz[-1])
+            nx=np.size(x)
+            na=(nx*apc)//100
+
+            for i in range(na+1):
+                x[i]*=(np.cos(i*np.pi/na)*(-0.5)+0.5)
+                x[nx-1-i]*=(np.cos(i*np.pi/na)*(-0.5)+0.5)
+            apodMask = x[np.newaxis] * x[:,np.newaxis]
+        else:
+            apodMask = np.ones((sz[-2],sz[-1]))
+            
+        if fourier == 'cosine':
+        # fourier apodization (2 x fpc %) if fourier == 'cosine', otherwise no Fourier apodization
+            x = np.ones(ds*2) # size of the cropped Fourier image
+            # pc = 10
+            nx=np.size(x)
+            na=(nx*fpc)//100 # number of points on each side to be defined as cosine
+
+            for i in range(na+1):
+                x[i]*=(np.cos(i*np.pi/na)*(-0.5)+0.5) # cosine function from 0 to na
+                x[nx-1-i]*=(np.cos(i*np.pi/na)*(-0.5)+0.5) # cosine function from nx to nx - na
+            fourierMask = x[np.newaxis] * x[:,np.newaxis] # 2d mask with cosine function on all the 4 edges
+        else:
+            fourierMask = np.ones((ds*2,ds*2))
+
+        # shift of the binned image (multiplication in Fourier space). Only the square case is considered here.
+        shf = 1;
+        if shift:
+            ky = fft.ifftshift(np.linspace(-np.fix(ds),np.ceil(ds)-1,(ds*2)))/(ds*2) # spatial frquency (units: 1/px)
+            kx = fft.ifftshift(np.linspace(-np.fix(ds),np.ceil(ds)-1,(ds*2)))/(ds*2) # same as ky if the image is a square
+            delta = (sz[-1]-ds*2)/2/(sz[-1]) # shift to be applied (this is the same value for x and y if the image is a square)
+            shf = np.exp(2j*np.pi*(ky[:,np.newaxis]*delta + kx[np.newaxis]*delta)) # 2d phase map equivalent to the shift
+        
+        if ndim == 3:
+            N = sz[0]
+        else:
+            N = 1
+            
+        for n in range(N):
+            if ndim == 3:
+                im = data[n]
+            else:
+                im = data
+            fftim = fft.fftn(im.copy() * apodMask)/im.size # fourier transform of the apodized image
+            fftbinim = fft.ifftshift(fft.fftshift(fftim)[cen-ds:cen+ds,cen-ds:cen+ds] * fourierMask) # cropped and masked Fourier transfromed of the image. the fftshifts are necessary due to how Fourier mask is created (0 frequency in the center)
+            binim = fft.ifftn(fftbinim * shf * fftbinim.size).real # shifted and binned image
+            
+            if ndim == 3:
+                binnedData[n] = binim
+            else:
+                binnedData = binim
+
+    else:
+        if ndim == 2:
+            binnedData = cv2.resize(data.copy().astype(np.float32),binnedData.shape,interpolation=cv2.INTER_LANCZOS4)
+        else:
+            for n in range(binnedData.shape[0]):
+                binnedData[n] = cv2.resize(data[n].copy().astype(np.float32),binnedData.shape[1:],interpolation=cv2.INTER_LANCZOS4)
+        fourierMask = None
+
+    return binnedData, fourierMask
+
+
+def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, header_imgdirx_exists, imgdirx_flipped, cpos_arr, nbin, pmp_temp) -> np.ndarray:
     """Load, properly scale, flip in X if needed, and make any necessary corrections for particular flat fields
 
     Parameters
@@ -99,7 +209,11 @@ def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, hea
         set to True if the science data is flipped, function will flip the flat to match, OPTIONS: 'YES' or 'NO', or False
     cpos_arr: np.ndarray
         array containing the continuum positions of the science scans - to make sure that the flat cpos matches the science flat
-
+    nbin: int
+        binning factor, must be a power of 2
+    pmp_temp: str
+        PMP temperature of the science data to be demodulated, options are '45' or '50'
+    
     Returns
     -------
     flat
@@ -129,9 +243,12 @@ def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, hea
     # correction based on science data - see if flat and science are both flipped or not
     flat = compare_IMGDIRX(flat,header_imgdirx_exists,imgdirx_flipped,header_fltdirx_exists,fltdirx_flipped)
     
-    flat = np.moveaxis(flat, 0,-1) #so that it is [y,x,24]
-    flat = flat.reshape(2048,2048,6,4) #separate 24 images, into 6 wavelengths, with each 4 pol states
-    flat = np.moveaxis(flat, 2,-1)
+    if nbin > 1:
+        printc(f'Binning flat by a factor {nbin}',color=bcolors.WARNING)
+        flat = hot_pixel_mask(np.moveaxis(flat,0,-1),slice(0,flat.shape[1]),slice(0,flat.shape[2]),nbin=1)
+        flat = np.moveaxis(flat,-1,0)
+        flat, _ = binningFunction(flat, nbin, crop=True, apod='none', apc=2, fourier='cosine', fpc=5, shift=False)
+    flat = stokes_reshape(flat)
     
     print(flat.shape)
 
@@ -173,6 +290,54 @@ def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, hea
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
 
     return flat, flat_pmp_temp, header_flat
+
+def load_cavity(cavity_f, wave_axis, nbin, rows, cols, returnWL = True):
+    """applies cavity shifts to the wave axis for use in RTE
+
+    Parameters
+    ----------
+    cavity_f : str or array
+        path to cavity map fits file or cavity array (already cropped)
+    wave_axis : array
+        wavelength axis
+    nbin : int
+        binning factor of the image
+    rows : array
+        rows of the pixels in the image, where the respective wavelength is shifted
+    cols : array
+        columns of the pixels in the image, where the respective wavelength is shifted
+
+    Returns
+    -------
+    new_wave_axis[rows, cols]: array
+        wavelength axis with the cavity shifts applied to the respective pixels
+    """
+    if isinstance(cavity_f,str):
+        cavityMap, _ = load_fits(cavity_f) # cavity maps
+        if nbin > 1:
+            printc(f'Binning cavity map by a factor {nbin}',color=bcolors.WARNING)
+            cavityMap, _ = binningFunction(cavityMap, nbin, crop=False, apod='none', apc=2, fourier='cosine', fpc=5, shift=False)
+        
+        if cavityMap.ndim == 3:
+            cavityWave = cavityMap[:,rows,cols].mean(axis=0)
+        else:
+            cavityWave = cavityMap[rows,cols]
+    else:
+        cavityMap = cavity_f
+        if nbin > 1:
+            printc(f'Binning cavity map by a factor {nbin}',color=bcolors.WARNING)
+            cavityMap, _ = binningFunction(cavityMap, nbin, crop=True, apod=False, apc=2, fourier='cosine', fpc=5, shift=False)
+        
+        if cavityMap.ndim == 3:
+            cavityWave = cavityMap.mean(axis=0)
+        else:
+            cavityWave = cavityMap
+        
+    if returnWL:
+        new_wave_axis = wave_axis[np.newaxis,np.newaxis] - cavityWave[...,np.newaxis]
+        return new_wave_axis
+    else:
+        return cavityWave
 
 
 def load_dark(dark_f) -> np.ndarray:
@@ -226,7 +391,7 @@ def load_dark(dark_f) -> np.ndarray:
         printc("ERROR, Unable to open and process darks file: {}",dark_f,color=bcolors.FAIL)
 
 
-def apply_dark_correction(data, dark, rows, cols) -> np.ndarray:
+def apply_dark_correction(data, dark, rows, cols, nbin) -> np.ndarray:
     """Apply dark field correction to the input data
 
     Parameters
@@ -239,7 +404,8 @@ def apply_dark_correction(data, dark, rows, cols) -> np.ndarray:
         rows to be used from dark - used in case data.shape does not agree with dark, or for testing
     cols: slice object
         columns to tbe used from dark - used in case data.shape does not agree with dark, or for testing
-
+    nbin: int
+        binning factor, must be a power of 2
     Returns
     -------
     data
@@ -249,7 +415,11 @@ def apply_dark_correction(data, dark, rows, cols) -> np.ndarray:
     print("-->>>>>>> Subtracting dark field")
     
     start_time = time.perf_counter()
-
+    if nbin > 1:
+        printc(f'Binning dark field by a factor {nbin}',color=bcolors.WARNING)
+        dark = hot_pixel_mask(dark,slice(0,dark.shape[0]),slice(0,dark.shape[1]),nbin=1)
+        dark, _ = binningFunction(dark, nbin, crop=True, apod='none', apc=2, fourier='cosine', fpc=5, shift=False)
+    
     data -= dark[rows,cols, np.newaxis, np.newaxis, np.newaxis] 
     #flat -= dark[..., np.newaxis, np.newaxis] #- # all processed flat fields should already be dark corrected
 
@@ -553,7 +723,7 @@ def flat_correction(data,flat,flat_states,cpos_arr,flat_pmp_temp=50,rows=slice(0
         printc("ERROR, Unable to apply flat fields",color=bcolors.FAIL)
 
 
-def prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_flipped = 'YES', prefilter_f = '/data/slam/oba/prefilter/'):
+def prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_flipped = 'YES', prefilter_f = '/data/slam/oba/prefilter/', nbin = 1):
     """
     New prefilter correction based on TO email on 2025-02-26
     Based on wavelength scans on 2024-07-10
@@ -572,7 +742,9 @@ def prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_fli
         check if data have been flipped (all the hrt-L1 data are flipped), DEFAULT = 'YES'
     prefilter_f: str
         directory where to find the prefilter files, DEFAULT = '/data/slam/oba/prefilter/'
-        
+    nbin: int
+        binning factor, must be a power of 2, DEFAULT = 1
+    
     Returns
     -------
     data: ndarray
@@ -617,6 +789,10 @@ def prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_fli
         printc('Flipping prefilter on the Y axis')
         prefilter = prefilter[:,:,::-1]
     
+    if nbin > 1:
+        printc(f'Binning prefilter by a factor {nbin}',color=bcolors.WARNING)
+        prefilter, _ = binningFunction(prefilter, nbin, crop=True, apod=False, apc=2, fourier='cosine', fpc=5, shift=False)
+        
     for scan in range(data.shape[-1]):
         wave_list = wave_axis_arr[scan]
         
@@ -654,7 +830,7 @@ def prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_fli
             data[:,:,:,wv,scan] /= imprefilter[...,np.newaxis]
     return data
 
-def prefilter_correction(data,wave_axis_arr,prefilter,Tetalon=0,prefilter_voltages = None, TemperatureCorrection=True, TemperatureConstant = 40.1225e-3, shift = None):
+def prefilter_correction(data,wave_axis_arr,prefilter,Tetalon=0,prefilter_voltages = None, TemperatureCorrection=True, TemperatureConstant = 40.1225e-3, shift = None, nbin = 1):
     """Apply prefilter correction to input data
 
     Parameters
@@ -673,6 +849,9 @@ def prefilter_correction(data,wave_axis_arr,prefilter,Tetalon=0,prefilter_voltag
         value of the temperature tuning constant to be used when TemperatureConstant is True, DEFAULT = 36.46e-3 mA/K
     shift: ndarray or None
         shift to be applied to the prefilter data pixel by pixel (cavity), DEFAULT = None
+    nbin: int
+        binning factor, must be a power of 2, DEFAULT = 1
+    
     Returns
     -------
     data: ndarray
@@ -722,6 +901,10 @@ def prefilter_correction(data,wave_axis_arr,prefilter,Tetalon=0,prefilter_voltag
         ref_wavelength = 6173.341 # this shouldn't change
         prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength
     
+    if nbin > 1:
+        printc(f'Binning prefilter by a factor {nbin}',color=bcolors.WARNING)
+        prefilter, _ = binningFunction(prefilter, nbin, crop=True, apod=False, apc=2, fourier='cosine', fpc=5, shift=False)
+    
     data_shape = data.shape
     
     for scan in range(data_shape[-1]):
@@ -768,7 +951,7 @@ def prefilter_correction(data,wave_axis_arr,prefilter,Tetalon=0,prefilter_voltag
   
     return data
 
-def apply_field_stop(data, rows, cols, header_imgdirx_exists, imgdirx_flipped) -> np.ndarray:
+def apply_field_stop(data, rows, cols, header_imgdirx_exists, imgdirx_flipped, nbin) -> np.ndarray:
     """Apply field stop to input data
 
     Parameters
@@ -783,7 +966,9 @@ def apply_field_stop(data, rows, cols, header_imgdirx_exists, imgdirx_flipped) -
         if imgdirx exists in header
     imgdirx_flipped: str or bool
         if input data is flipped, OPTIONS: 'YES', 'NO', or False
-
+    nbin: int
+        binning factor, must be a power of 2
+    
     Returns
     -------
     data: ndarray
@@ -807,7 +992,19 @@ def apply_field_stop(data, rows, cols, header_imgdirx_exists, imgdirx_flipped) -
     if header_imgdirx_exists:
         if imgdirx_flipped == 'YES': #should be YES for any L1 data, but mistake in processing software
             field_stop = field_stop[:,::-1] #also need to flip the flat data after dark correction
-
+    if nbin > 1:
+        printc(f'Binning field stop by a factor {nbin}',color=bcolors.WARNING)
+        # field stop with no masking to avoid strange results at the edges when masking
+        field_stop, _ = binningFunction(field_stop, nbin, crop=False, apod=None, fourier=None, shift=False)
+        field_stop = field_stop > 0.99
+        # covering the apodization area
+        # apc = 2
+        # na=int(np.round(2048*apc/nbin/100,0))
+        # field_stop[:na+1] = 0
+        # field_stop[-na:] = 0
+        # field_stop[:,:na+1] = 0
+        # field_stop[:,-na:] = 0
+        
     data *= field_stop[rows,cols,np.newaxis, np.newaxis, np.newaxis]
 
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
@@ -1550,7 +1747,7 @@ def CT_ItoQUV(data, ctalk_params, norm_stokes, cpos_arr, Ic_mask):
     return data
 
 
-def hot_pixel_mask(data, rows, cols, mode='median'):
+def hot_pixel_mask(data, rows, cols, mode = 'median', nbin = 1):
     """
     Apply hot pixel mask to the data, just after cross talk to remove pixels that diverge
     
@@ -1564,7 +1761,8 @@ def hot_pixel_mask(data, rows, cols, mode='median'):
         columns of the data to be corrected
     mode: str
         'median' or 'mean' to apply to the data
-
+    nbin: int
+        binning factor  (Default: 1)
     Returns
     -------
     data: ndarray
@@ -1577,10 +1775,18 @@ def hot_pixel_mask(data, rows, cols, mode='median'):
     
     s = data.shape # [y,x,p,l,s]
     
+    if nbin > 1:
+        hot_pix_mask, _ = binningFunction(hot_pix_mask > 0, nbin, crop=True, apod=False, apc=2, fourier=False, fpc=5, shift=False)
+        hot_pix_mask = binary_fill_holes(hot_pix_mask > .9)
+        hot_pix_cont = binary_dilation(hot_pix_mask>0,np.ones((3,3)),iterations=int(5//nbin))
+        hot_pix_cont[hot_pix_mask] = 0
+        hot_pix_mask,_ = label(hot_pix_mask)
+        hot_pix_cont,_ = label(hot_pix_cont)
+
     if mode == 'median':
-        func = lambda a: np.median(a,axis=0)
+        func = lambda a, axis: np.nanmedian(a,axis)
     elif mode == 'mean':
-        func = lambda a: np.mean(a,axis=0)
+        func = lambda a, axis: np.nanmean(a,axis)
     else:
         print('mode not found, input dataset not corrected')
         return data
@@ -1591,7 +1797,7 @@ def hot_pixel_mask(data, rows, cols, mode='median'):
         bad = (hot_pix_mask[rows,cols] == i)
         if np.sum(bad) > 0:
             med = (hot_pix_cont[rows,cols] == i)
-            data[bad] = func(data[med])
+            data[bad] = func(data[med],0)
     
     return data
 
@@ -1657,10 +1863,10 @@ def limb_side_finder(img, hdr,verbose=True):
         if verbose:
             print('Limb is not in the FoV according to WCS keywords')
 
-    ds = 256
+    ds = int(256//hdr['NBIN1'])
     if hdr['DSUN_AU'] < 0.4:
         if side == '':
-            ds = 384
+            ds = int(384//hdr['NBIN1'])
     dx = 0; dy = 0
     if 'N' in side and img.shape[0]//2 - ds > img.shape[0]//4:
         dy = -img.shape[0]//4
@@ -1985,7 +2191,7 @@ def limb_ellipse(img, hdr, field_stop, AR_mask, verbose=True, percent=False, fit
         # if hdr['DSUN_AU'] < 0.4:
         #     windowSize = 384
         # else:
-        windowSize = 256
+        windowSize = int(256//hdr['NBIN1'])
         contrast256 = subROIconstrast(img.copy(), (field_stop*mask98)>0, windowSize, windowSize)
         i,j = np.unravel_index(np.argmax(contrast256),contrast256.shape)
         sly,slx = slice(i-windowSize,i+windowSize), slice(j-windowSize,j+windowSize)
@@ -2267,7 +2473,7 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr, derivative = True
                 old_data, _, _ = fran_restore(dat, PSFt, 
                                               sly=slice(0,dat.shape[0]), slx=slice(0,dat.shape[1]),
                                               mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0, low_f=0.1, aberr_cor=False, 
-                                              PD_f=deconv['PD_f'], straylight_corr=deconv['straylight_correction'])
+                                              PD_f=deconv['PD_f'], straylight_corr=deconv['straylight_correction'], nbin=hdr_arr[scan]['NBIN1'])
                 sly, slx = slice(5,sly.stop-sly.start+5), slice(5,slx.stop-slx.start+5)
             else:
                 old_data = data[...,scan].copy()

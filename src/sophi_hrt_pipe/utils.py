@@ -311,6 +311,31 @@ def check_filenames(data_f):
     return scan_name_list
 
 
+def check_binning(hdr_arr):
+    """check if science scans have same dimensions
+
+    Parameters
+    ----------
+    hdr_arr : list
+        list of science scan header arrays
+    
+    Returns
+    -------
+    None
+    """
+    first_shape = hdr_arr[0]['NBIN1']
+    assert first_shape == hdr_arr[0]['NBIN2'], "NBIN1 and NBIN2 are not equal in the first scan, this is not expected"
+
+    result1 = all(element['NBIN1'] == first_shape for element in hdr_arr)
+    result2 = all(element['NBIN2'] == first_shape for element in hdr_arr)
+    if (result1 and result2):
+        print("All the scan(s) have the same binning factor")
+
+    else:
+        print("The scans have different binning factors! \n Ending process")
+
+        exit()
+
 def check_size(data_arr):
     """check if science scans have same dimensions
 
@@ -624,7 +649,7 @@ def filling_data(arr, thresh, mode, axis = -1):
                     a0[:,i] = a1
     return a0
     
-def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_iter = 3, dilation_iter = 3, closing_iter = 20):
+def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_iter = 3, dilation_iter = 3, closing_iter = 20, net = False):
     """Creates a mask to cover active parts of the FoV
     Parameters
     ----------
@@ -644,7 +669,9 @@ def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_it
         number of iterations for the dilation of the mask (DEFAULT: 3)    
     closing_iter : int
         number of iterations for the closing of the mask (DEFAULT: 20)    
-
+    net: bool
+        if True, it uses the polarizaion maps minus the continuum (to avoid ghost) (DEFAULT: False)
+    
     Returns
     -------
     array
@@ -655,14 +682,27 @@ def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_it
     # automatic bins looking at max std of the continuum polarization
     if stk.shape[1] == 4:
         stk = np.einsum('lpyx->yxpl',stk.copy())
-    lim = np.max((stk[:,:,1:,cpos]).std(axis=(0,1)))*bin_lim
+    lim = np.max((stk[initial_mask==1,1:,cpos]).std(0))*bin_lim
     bins = np.linspace(-lim,lim,150)
 
+    # plt.figure()
     for p in range(1,4):
-        hi = np.histogram(stk[:,:,p].flatten(),bins=bins)
+        if net:
+            stk = stk.copy()
+            if cpos == 0:
+                wl = range(1,6)
+            else:
+                wl = range(0,5)
+            for l in wl:
+                stk[:,:,p,l] -= stk[:,:,p,cpos]
+        else:
+            wl = range(0,6)
+            # im = stk[:,:,p]
+        hi = np.histogram(stk[:,:,p,wl].flatten(),bins=bins)
+        # plt.step(hi[1][:-1], hi[0], where='post')
         gval = gaussian_fit(hi, show = False)
-        AR_mask *= np.max(np.abs(stk[:,:,p] - gval[1]),axis=-1) < mask_lim*abs(gval[2])
-
+        AR_mask *= np.max(np.abs(stk[:,:,p,wl] - gval[1]),axis=-1) < mask_lim*abs(gval[2])
+    # plt.show()
     AR_mask = np.asarray(AR_mask, dtype=bool)
 
     # erosion and dilation to remove small scale masked elements
@@ -671,6 +711,9 @@ def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_it
     
     AR_mask = AR_mask * initial_mask
 
+    # plt.figure()
+    # plt.imshow(AR_mask,origin='lower')
+    # plt.show()
     return np.array(AR_mask, dtype=bool)
 
 def auto_norm(file_name):
@@ -1099,45 +1142,6 @@ def und(hrt, order=1, flip = True):
 
 
 ###############################################
-
-def cavity_shifts(cavity_f, wave_axis,rows,cols,returnWL = True):
-    """applies cavity shifts to the wave axis for use in RTE
-
-    Parameters
-    ----------
-    cavity_f : str or array
-        path to cavity map fits file or cavity array (already cropped)
-    wave_axis : array
-        wavelength axis
-    rows : array
-        rows of the pixels in the image, where the respective wavelength is shifted
-    cols : array
-        columns of the pixels in the image, where the respective wavelength is shifted
-
-    Returns
-    -------
-    new_wave_axis[rows, cols]: array
-        wavelength axis with the cavity shifts applied to the respective pixels
-    """
-    if isinstance(cavity_f,str):
-        cavityMap, _ = load_fits(cavity_f) # cavity maps
-        if cavityMap.ndim == 3:
-            cavityWave = cavityMap[:,rows,cols].mean(axis=0)
-        else:
-            cavityWave = cavityMap[rows,cols]
-    else:
-        cavityMap = cavity_f
-        if cavityMap.ndim == 3:
-            cavityWave = cavityMap.mean(axis=0)
-        else:
-            cavityWave = cavityMap
-        
-    if returnWL:
-        new_wave_axis = wave_axis[np.newaxis,np.newaxis] - cavityWave[...,np.newaxis]
-        return new_wave_axis
-    else:
-        return cavityWave
-
 def load_l2_stk(directory,did,version=None):
     import glob
     file_n = os.listdir(directory)

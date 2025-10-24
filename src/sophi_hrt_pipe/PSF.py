@@ -195,7 +195,61 @@ def pmask(nuc,N):
     #pmask=np.where(pmask<0,0,pmask)
     return pmask
 
-def noise_power(Of,nuc,N,filterfactor=1.5):
+def azimuthal_average(d3array, center=None, axes=(0,1)):
+    """
+        Parameters
+    ----------
+    d3array : 3d array (ky,kx,N)
+    center : center of the annuls summing
+    axes : axes of (ky,kx)
+    
+    Returns
+    -------
+    d2array : azimuthal average of d3array with size (N,ky//2)
+
+    """
+    from scipy.ndimage import mean as spmean
+    sz = d3array.shape
+    if len(sz) == 3:
+        yi=axes[0]; xi=axes[1]; ni=yi-1
+        if ni<0:
+            ni = 2
+        N, ny, nx = sz[ni], sz[yi], sz[xi]
+    else: # sz = (ny,nx)
+        yi=axes[0]; xi=axes[1]; ni = 2
+        N, ny, nx = 1, sz[yi], sz[xi]
+        d3array = d3array[...,np.newaxis]
+    size = (N,int(ny//2))
+    d2array = np.zeros(size, dtype=d3array.dtype)
+    
+    if center is None: # use the middle of the image
+        center = [int(np.floor(nx/2)), int(np.floor(ny/2))]
+
+    bins = size[1] 
+    X, Y = np.ogrid[0:nx, 0:ny]
+    r = np.hypot(X - center[0], Y - center[1])
+    max_r = max(ny-center[1], nx-center[0])
+    r[np.round(r,0)>max_r] = -1
+    rbin = np.round(bins * r/r.max(),0).astype(int)
+    index = np.arange(0,rbin.max())
+    #return r, rbin, index
+    if d2array.dtype==complex:
+        for i in range(N):
+            rea = d3array.take(i,axis=ni).real
+            img = d3array.take(i,axis=ni).imag
+            radial_mean_real = spmean(rea, labels = rbin, index = index)
+            radial_mean_imag = spmean(img, labels = rbin, index = index)
+            d2array[i] = radial_mean_real + 1j*radial_mean_imag
+            
+    else:
+        for i in range(N):
+            rea = d3array.take(i,axis=ni).real
+            radial_mean_real = spmean(rea, labels = rbin, index = index)
+            d2array[i] = radial_mean_real
+                        
+    return d2array
+
+def noise_power(Of,nuc,N,filterfactor=1.5,nbin = 1):
     """
     Average level of noise power of the image. Based on Bonet's program
     'noise_level.pro'. Noise is computed on 4 quadrants of the
@@ -204,23 +258,38 @@ def noise_power(Of,nuc,N,filterfactor=1.5):
     that appears because of the finite Nyquist frecuency of the detector.
     """
     #Circular obscuration mask to calculate the noise beyond the critical freq.
-    cir_obs=pmask(nuc=nuc,N=N)
+    from scipy.optimize import curve_fit
 
-    #Calculation of noise
-    #power=np.sum(np.abs(Of)**2*cir_obs)/np.sum(cir_obs)
-    #1st quadrant
-    x2=int(np.floor(N/2-nuc*np.sqrt(2)/2))
-    power=np.sum((np.abs(Of)**2*cir_obs)[0:x2,0:x2])/np.sum(cir_obs[0:x2,0:x2])
-    #2nd quadrant
-    x3=N-x2
-    power+=np.sum((np.abs(Of)**2*cir_obs)[x3:N,0:x2])/np.sum(cir_obs[x3:N,0:x2])
-    #3rd quadrant
-    power+=np.sum((np.abs(Of)**2*cir_obs)[0:x2,x3:N])/np.sum(cir_obs[0:x2,x3:N])
-     #4th quadrant
-    power+=np.sum((np.abs(Of)**2*cir_obs)[x3:N,x3:N])/np.sum(cir_obs[x3:N,x3:N])
+    if nbin == 1:
+        cir_obs=pmask(nuc=nuc,N=N)
 
-    #To obtain a more conservative filter in filter_sch
-    power=filterfactor*power
+        #Calculation of noise
+        #power=np.sum(np.abs(Of)**2*cir_obs)/np.sum(cir_obs)
+        #1st quadrant
+        x2=int(np.floor(N/2-nuc*np.sqrt(2)/2))
+        power=np.sum((np.abs(Of)**2*cir_obs)[0:x2,0:x2])/np.sum(cir_obs[0:x2,0:x2])
+        #2nd quadrant
+        x3=N-x2
+        power+=np.sum((np.abs(Of)**2*cir_obs)[x3:N,0:x2])/np.sum(cir_obs[x3:N,0:x2])
+        #3rd quadrant
+        power+=np.sum((np.abs(Of)**2*cir_obs)[0:x2,x3:N])/np.sum(cir_obs[0:x2,x3:N])
+        #4th quadrant
+        power+=np.sum((np.abs(Of)**2*cir_obs)[x3:N,x3:N])/np.sum(cir_obs[x3:N,x3:N])
+
+        #To obtain a more conservative filter in filter_sch
+        power=filterfactor*power
+    else:
+        # def _log_powerlaw_cutoff(x, logA, alpha, x0):
+        #     return logA - alpha * np.log(x) - x / x0
+        
+        # # assuming that binned data are used only for science, not for PSF estimation
+        # y = azimuthal_average(abs(Of))[0,1:] # avoid first term because of average removal
+        # x = np.arange(y.size)+1
+        # popt, pcov = curve_fit(_log_powerlaw_cutoff, x, np.log(y), p0=[0.1, 1.65, -5.5])
+        # values = np.exp(_log_powerlaw_cutoff(np.arange(int(nuc),int(N*np.sqrt(2)/2*nbin)), *popt))**2
+        # power = np.nanmean(values) * filterfactor * 4 # *4 because in the normal function it is summing up 4 corners
+        # power /= 50 # empiricallly found during testing phase
+        power = 2e-11 # from PD dataset
     return power
 
 def prepare_PD(ima,nuc,N,wind=True,kappa=100):
@@ -510,7 +579,7 @@ def select_tiptilt(a,i,K):
     a1=np.concatenate((firsta,a[(2*K+1):])) #0 is for the offset term
     return a1
 
-def OTF(a,a_d,RHO,THETA,ap,norm=None,K=2,tiptilt=True,straylight_corr=True):
+def OTF(a,a_d,RHO,THETA,ap,norm=None,K=2,tiptilt=True,straylight_corr=True,nbin=1):
     """
     This function calculates the OTFs of a circular aperture for  incident
     wavefronts with aberrations given by a set of Zernike coefficients.
@@ -525,6 +594,8 @@ def OTF(a,a_d,RHO,THETA,ap,norm=None,K=2,tiptilt=True,straylight_corr=True):
          is None
         tiptilt: {True,False). If True, the first 2*(K-1) Zernike terms
         correspond to tip/tilt terms.
+        straylight_corr: {True,False} to apply straylight correction
+        nbin: binning factor (integer, >= 1)
     Output:
         otf: 2D complex array representing the OTF if len(a_d)!=K or
             a 3D complex array whose 3rd dimenstion indicates the  OTF of
@@ -554,7 +625,7 @@ def OTF(a,a_d,RHO,THETA,ap,norm=None,K=2,tiptilt=True,straylight_corr=True):
             
 
         if straylight_corr:
-            otf = add_straylight_to_otf(otf)
+            otf = add_straylight_to_otf(otf,nbin=nbin)
         
         otf=otf[...,np.newaxis]#To create a 3rd dummy axis    
     #If a_d is an array containing K diversities
@@ -582,7 +653,7 @@ def OTF(a,a_d,RHO,THETA,ap,norm=None,K=2,tiptilt=True,straylight_corr=True):
                 norma[i]=1
     return otf,norma
 
-def add_straylight_to_otf(otf):
+def add_straylight_to_otf(otf,nbin=1):
     """input otf must be normalised"""
     print('Straylight correction')
     A1   = 1       # weight for PD-MTF
@@ -597,7 +668,7 @@ def add_straylight_to_otf(otf):
     A2 /= A
     A3 /= A
     
-    IMSCALE = 0.5
+    IMSCALE = 0.5*nbin
     
     w = otf.shape[0]
     freqscale = 1./(w*IMSCALE)
@@ -677,7 +748,7 @@ def Ffactor(Q,Ok,Hk,gamma=gamma1):
     """
     return Q**2*np.sum(gamma*Ok*np.conj(Hk),axis=2)
 
-def filter_sch(Q,Ok,Hk,nuc,N,low_f=0.2,gamma=gamma1):
+def filter_sch(Q,Ok,Hk,nuc,N,low_f=0.2,gamma=gamma1,nbin=1):
     """
     Filter of the Fourier transforms of the focused and defocused
     object (Eqs. 18-19 of Lofdahl & Scharmer 1994). Based on
@@ -686,6 +757,7 @@ def filter_sch(Q,Ok,Hk,nuc,N,low_f=0.2,gamma=gamma1):
         Q: Q returned in Qfactor
         Ok: 3D array with the FFTs of each of the PD images with different defoc.
         Hk: 3D array with the OTFs of the system for each defocus
+        nbin: binning factor (used in noise filter)
     Output:
         filter:2D array (float64) with filter
     """
@@ -693,7 +765,7 @@ def filter_sch(Q,Ok,Hk,nuc,N,low_f=0.2,gamma=gamma1):
     denom=np.abs(Ffactor(Q,Ok,Hk,gamma=gamma))**2\
     *Qinv(Hk,gamma=gamma,nuc=nuc,N=N)**2
 
-    filter=noise_power(Ok[:,:,0],nuc=nuc,N=N)/uniform_filter(denom, size=3)
+    filter=noise_power(Ok[:,:,0],nuc=nuc,N=N,nbin=nbin)/uniform_filter(denom, size=3)
     filter=(filter+np.flip(filter))/2
     filter=1-filter
     filter=np.where(filter<low_f,0,filter)
@@ -811,7 +883,7 @@ def meritl(e,cut=None):
     return L
 
 def object_estimate(ima,a,a_d,reg=0.1,wind=True,cobs=0,cut=29,low_f=0.2,tiptilt=False,
-                    noise='default',aberr_cor=False,straylight_corr=False):
+                    noise='default',aberr_cor=False,straylight_corr=False, nbin=1):
     """
     This function restores an image or an array of images employing a given
     set of Zernike coefficients.
@@ -834,6 +906,7 @@ def object_estimate(ima,a,a_d,reg=0.1,wind=True,cobs=0,cut=29,low_f=0.2,tiptilt=
             'prepare_PD'
         noise: 'default' to be computed as filt_scharmer. Otherwise, this variable
             should contain a 2x2 array with the filter.
+        nbin: binning factor
     Output:
         object: restored image
         susf: offset defined in 'prepare_PD' 
@@ -841,7 +914,7 @@ def object_estimate(ima,a,a_d,reg=0.1,wind=True,cobs=0,cut=29,low_f=0.2,tiptilt=
     """
     #Pupil sampling according to image size
     N=ima.shape[0]
-    RHO, THETA, ap, nuc, _ = image_constants(N,wvl,fnum,Delta_x)
+    RHO, THETA, ap, nuc, _ = image_constants(N,wvl,fnum,Delta_x*nbin)
 
     #Fourier transform images
     Ok, gamma, wind, susf=prepare_PD(ima,nuc=nuc,N=N,wind=wind)
@@ -852,17 +925,17 @@ def object_estimate(ima,a,a_d,reg=0.1,wind=True,cobs=0,cut=29,low_f=0.2,tiptilt=
                 gamma=[1,0] #To account only for the 1st image
 
     #OTFs
-    Hk,normhk=OTF(a,a_d,RHO,THETA,ap,norm=True,K=Ok.shape[2],tiptilt=tiptilt,straylight_corr=straylight_corr)
+    Hk,normhk=OTF(a,a_d,RHO,THETA,ap,norm=True,K=Ok.shape[2],tiptilt=tiptilt,straylight_corr=straylight_corr,nbin=nbin)
     
     #Restoration
     Q=Qfactor(Hk,gamma=gamma,reg=reg,nuc=nuc,N=N)
 
     if isinstance(noise,str):
         if noise=='default':
-            noise_filt=filter_sch(Q,Ok,Hk,gamma=gamma,nuc=nuc,N=N,low_f=low_f)
+            noise_filt=filter_sch(Q,Ok,Hk,gamma=gamma,nuc=nuc,N=N,low_f=low_f,nbin=nbin)
         else:
             print('WARNING. Only default is accepted as a string input. It will run anyway.')
-            noise_filt=filter_sch(Q,Ok,Hk,gamma=gamma,nuc=nuc,N=N,low_f=low_f)
+            noise_filt=filter_sch(Q,Ok,Hk,gamma=gamma,nuc=nuc,N=N,low_f=low_f,nbin=nbin)
     else:
         noise_filt=noise.copy()
 
@@ -888,7 +961,7 @@ def object_estimate(ima,a,a_d,reg=0.1,wind=True,cobs=0,cut=29,low_f=0.2,tiptilt=
 
     #Apply MTF of ideal telescope
     if aberr_cor:
-        Hk_th,_ = OTF(np.zeros(20),a_d,RHO,THETA,ap,norm=True,K=Ok.shape[2],tiptilt=tiptilt,straylight_corr=False)
+        Hk_th,_ = OTF(np.zeros(20),a_d,RHO,THETA,ap,norm=True,K=Ok.shape[2],tiptilt=tiptilt,straylight_corr=False,nbin=nbin)
         O=Hk_th[...,0]*O
 
     Oshift=np.fft.fftshift(O)
@@ -900,7 +973,7 @@ def object_estimate(ima,a,a_d,reg=0.1,wind=True,cobs=0,cut=29,low_f=0.2,tiptilt=
     return object,susf,noise_filt
     # return locals()
 
-def object_estimate_short(ima,Hk,Q,nuc,wind=True,low_f=0.2,noise='default',Hk_th=None):
+def object_estimate_short(ima,Hk,Q,nuc,wind=True,low_f=0.2,noise='default',Hk_th=None,nbin=1):
     """
     This function restores an image or an array of images employing a given
     set of Zernike coefficients.
@@ -923,6 +996,7 @@ def object_estimate_short(ima,Hk,Q,nuc,wind=True,low_f=0.2,noise='default',Hk_th
             'prepare_PD'
         noise: 'default' to be computed as filt_scharmer. Otherwise, this variable
             should contain a 2x2 array with the filter.
+        nbin: binning factor (used in noise mask)
     Output:
         object: restored image
         susf: offset defined in 'prepare_PD' 
@@ -936,10 +1010,10 @@ def object_estimate_short(ima,Hk,Q,nuc,wind=True,low_f=0.2,noise='default',Hk_th
 
     if isinstance(noise,str):
         if noise=='default':
-            noise_filt=filter_sch(Q,Ok,Hk,gamma=gamma,nuc=nuc,N=N,low_f=low_f)
+            noise_filt=filter_sch(Q,Ok,Hk,gamma=gamma,nuc=nuc,N=N,low_f=low_f,nbin=nbin)
         else:
             print('WARNING. Only default is accepted as a string input. It will run anyway.')
-            noise_filt=filter_sch(Q,Ok,Hk,gamma=gamma,nuc=nuc,N=N,low_f=low_f)
+            noise_filt=filter_sch(Q,Ok,Hk,gamma=gamma,nuc=nuc,N=N,low_f=low_f,nbin=nbin)
     else:
         noise_filt=noise.copy()
 
@@ -985,7 +1059,7 @@ def is_notebook() -> bool:
         return False      # Probably standard Python interpreter
 
 def stokes_restoration(stokes_data,coefs,sly = slice(0,2048), slx = slice(0,2048),rest='lofdahl', gamma2=0.1,denoise=False,
-                       wind_opt=True, low_f=0.1,num_iter=10,aberr_cor=False,straylight_corr=False,padding=True,cavity=None):
+                       wind_opt=True, low_f=0.1,num_iter=10,aberr_cor=False,straylight_corr=False,padding=True,cavity=None,nbin=1):
     """
     This function restores a cube of Stokes data from a given set of
     Zernike coefficients.
@@ -1004,7 +1078,8 @@ def stokes_restoration(stokes_data,coefs,sly = slice(0,2048), slx = slice(0,2048
         wind_opt (True or False): True to apodize the images.
         low_f: cut-off frequency of the noise filter in the function 'filter_sch'w
         num_iter: number of iterations if the Lucy-Richardson option is enable.
-        cavity
+        cavity: cavity to be deconvolved
+        nbin: binning factor (Default: 1)
     """
     size = stokes_data[:,:,0,0].shape[0]
     size_roi = stokes_data[sly,slx,0,0].shape[0]
@@ -1057,11 +1132,11 @@ def stokes_restoration(stokes_data,coefs,sly = slice(0,2048), slx = slice(0,2048
                     
                     # quantities that are constant in restoration (for object_estimate_short)
                     N=im0.shape[0]
-                    RHO, THETA, ap, nuc, _ = image_constants(N,wvl,fnum,Delta_x)
+                    RHO, THETA, ap, nuc, _ = image_constants(N,wvl,fnum,Delta_x*nbin)
                     #OTFs
-                    Hk,_ = OTF(coefs,0,RHO,THETA,ap,norm=True,K=1,tiptilt=True,straylight_corr=straylight_corr)
+                    Hk,_ = OTF(coefs,0,RHO,THETA,ap,norm=True,K=1,tiptilt=True,straylight_corr=straylight_corr,nbin=nbin)
                     if aberr_cor:
-                        Hk_th,_ = OTF(np.zeros(20),0,RHO,THETA,ap,norm=True,K=1,tiptilt=True,straylight_corr=False)
+                        Hk_th,_ = OTF(np.zeros(20),0,RHO,THETA,ap,norm=True,K=1,tiptilt=True,straylight_corr=False,nbin=nbin)
                     else:
                         Hk_th = None
                     #Restoration
@@ -1075,14 +1150,14 @@ def stokes_restoration(stokes_data,coefs,sly = slice(0,2048), slx = slice(0,2048
                         im0_roi = stokes_data[sly,slx,i,j] #* edge_mask
                         im0_roi = np.pad(im0_roi, pad_width=((pad_width_roi, pad_width_roi), (pad_width_roi, pad_width_roi)),\
                                       mode='symmetric')
-                        noise=object_estimate(im0_roi,coefs,0,reg=gamma2,wind=wind_opt,low_f=low_f,noise=noise,aberr_cor=aberr_cor,straylight_corr=straylight_corr)[2]
+                        noise=object_estimate(im0_roi,coefs,0,reg=gamma2,wind=wind_opt,low_f=low_f,noise=noise,aberr_cor=aberr_cor,straylight_corr=straylight_corr, nbin=nbin)[2]
                         noise = cv2.resize(noise.astype('float32'),im0.shape,interpolation=cv2.INTER_LANCZOS4).astype('float64')
                 else:
                     noise=noise_filt #To use always the same noise_filt (I at continuum)   
                 
                 #Restoration using mean power of noise at I_cont
                 
-                res_stokes[:,:,i,j],_,noise_filt=object_estimate_short(im0,Hk=Hk.copy(),Q=Q.copy(),nuc=nuc,wind=True,low_f=low_f,noise=noise,Hk_th=Hk_th)
+                res_stokes[:,:,i,j],_,noise_filt=object_estimate_short(im0,Hk=Hk.copy(),Q=Q.copy(),nuc=nuc,wind=True,low_f=low_f,noise=noise,Hk_th=Hk_th,nbin=nbin)
                 if np.ndim(coefs) == 2:
                     res_stokes[:,:,i,j] = fftshift(res_stokes[:,:,i,j])
                 # res_stokes[:,:,i,j],susf,noise_filt=object_estimate(im0,coefs,0,
@@ -1127,7 +1202,7 @@ def stokes_restoration(stokes_data,coefs,sly = slice(0,2048), slx = slice(0,2048
             noise=noise_filt
         # res_cavity,susf,noise_filt=object_estimate(im0,coefs,0,
         #                 reg=gamma2,wind=wind_opt,low_f=low_f,noise=noise,aberr_cor=aberr_cor,straylight_corr=straylight_corr)
-        res_cavity,_,noise_filt=object_estimate_short(im0,Hk.copy(),Q.copy(),nuc,wind=True,low_f=low_f,noise=noise,Hk_th=Hk_th)
+        res_cavity,_,noise_filt=object_estimate_short(im0,Hk.copy(),Q.copy(),nuc,wind=True,low_f=low_f,noise=noise,Hk_th=Hk_th,nbin=nbin)
         if np.ndim(coefs) == 2:
             res_cavity = fftshift(res_cavity)
         res_cavity = res_cavity[pad_width:res_cavity.shape[0]-pad_width,pad_width:res_cavity.shape[1]-pad_width]
@@ -1234,7 +1309,7 @@ def extract_coefs(tobs,PD_f = '/data/slam/home/calchetti/hrt_pipeline/csv/PD_res
         print(np.round(coefs,5))
     return coefs
 
-def fran_restore(stokes_data, tobs, mask=None, sly = slice(0,2048), slx = slice(0,2048), rest='lofdahl', gamma2 = 0.1, low_f=0.1, denoise=False, num_iter=10, aberr_cor = False, straylight_corr=False, padding=True, cavity=None, PD_f = './csv/PD_result.csv', PSF=None):
+def fran_restore(stokes_data, tobs, mask=None, sly = slice(0,2048), slx = slice(0,2048), rest='lofdahl', gamma2 = 0.1, low_f=0.1, denoise=False, num_iter=10, aberr_cor = False, straylight_corr=False, padding=True, cavity=None, PD_f = './csv/PD_result.csv', PSF=None, nbin=1):
     #Input parameters
     # mask=None # mask of the field_stop and limb
     # rest='lofdahl' #'lofdahl','lucy-richardson'or 'unsupervised_wiener'. Type of restoration (Here only lofdahl is implemented)
@@ -1251,6 +1326,7 @@ def fran_restore(stokes_data, tobs, mask=None, sly = slice(0,2048), slx = slice(
     # cavity=None # if cavity array is given, then it is deconvolved
     # PD_f='/data/slam/home/calchetti/hrt_pipeline/csv/PD_result.csv' look-up table for the Zernike values
     # PSF=None # if PSF is given, then it is used for the restoration instead of the Zernike coefficients
+    # nbin=1 # binning factor
     #Restoration parameters
     wind_opt=True #True to apodize the image
 
@@ -1274,7 +1350,7 @@ def fran_restore(stokes_data, tobs, mask=None, sly = slice(0,2048), slx = slice(
     #                                 num_iter=num_iter, aberr_cor=aberr_cor,padding=padding, cavity=cavity)
     res_stokes, res_cavity, PSF = stokes_restoration(stokes_data_edge,coefs,sly=sly,slx=slx,rest=rest, gamma2=gamma2,
                                         denoise=denoise, wind_opt=wind_opt,low_f=low_f,
-                                        num_iter=num_iter, aberr_cor=aberr_cor, straylight_corr=straylight_corr,padding=padding, cavity=cavity)
+                                        num_iter=num_iter, aberr_cor=aberr_cor, straylight_corr=straylight_corr,padding=padding, cavity=cavity, nbin=nbin)
     
     if mask is not None:
         res_stokes[mask==0] = stokes_data[mask==0]

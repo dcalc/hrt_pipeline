@@ -8,9 +8,9 @@ import git
 from numpy.core.numeric import True_
 from scipy.ndimage import binary_dilation, binary_erosion, generate_binary_structure
 
-from .utils import printc, bcolors, get_data, fits_get_sampling, check_size, check_cpos, check_pmp_temp, stokes_reshape, compare_IMGDIRX, compare_cpos, load_fits, cavity_shifts, ARmasking, check_IMGDIRX, check_filenames
+from .utils import printc, bcolors, get_data, fits_get_sampling, check_size, check_binning, check_cpos, check_pmp_temp, stokes_reshape, compare_IMGDIRX, compare_cpos, load_fits,  ARmasking, check_IMGDIRX, check_filenames
 
-from .processes import setup_header, apply_dark_correction, load_and_process_flat, prefilter_correction, prefilter_correction_WLS, normalise_flat, unsharp_masking, flat_correction, apply_field_stop, hot_pixel_mask, load_ghost_field_stop, polarimetric_registration, wavelength_registration, demod_hrt, crosstalk_2D_ItoQUV, crosstalk_auto_VtoQU, CT_VtoQU, write_out_intermediate, data_hdr_kw, limb_ellipse, average_registration
+from .processes import setup_header, apply_dark_correction, load_and_process_flat, load_cavity, prefilter_correction, prefilter_correction_WLS, normalise_flat, unsharp_masking, flat_correction, apply_field_stop, hot_pixel_mask, load_ghost_field_stop, polarimetric_registration, wavelength_registration, demod_hrt, crosstalk_2D_ItoQUV, crosstalk_auto_VtoQU, CT_VtoQU, write_out_intermediate, data_hdr_kw, limb_ellipse, average_registration
 
 from .inversions import generate_l2, create_output_filenames, CE_output
 from .coordinates import muSO_map
@@ -122,7 +122,7 @@ def phihrt_pipe(input_json_file):
     pipeline_dir = os.path.realpath(__file__).split('src/')[0]
     repo = git.Repo(pipeline_dir)
     sha = repo.head.object.hexsha
-    version = 'V1.9.4 May 14th 2025'
+    version = 'V1.10.0 October 24th 2025'
 
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
     printc('PHI HRT data reduction software  ',bcolors.OKGREEN)
@@ -390,6 +390,12 @@ def phihrt_pipe(input_json_file):
         check_size(data_arr)
 
         #--------
+        # test if the scans have different sizes
+        #--------
+
+        check_binning(hdr_arr)
+
+        #--------
         # test if the scans have different continuum wavelength_positions
         #--------
 
@@ -416,32 +422,24 @@ def phihrt_pipe(input_json_file):
         printc("ERROR, data_f argument is neither a string nor list containing strings: {} \n Ending Process",data_f,color=bcolors.FAIL)
         exit()
 
-    data_shape = data.shape
-
     #converting to [y,x,pol,wv,scans]
-
     data = stokes_reshape(data)
-    
+    data_shape = data.shape
     data_size = data.shape[:2]
+    nbin = hdr_arr[0]['NBIN1']
     
     #enabling cropped datasets, so that the correct regions of the dark field and flat field are applied
-    print("Data reshaped to: ", data.shape)
-
-    diff = 2048-data_size[0] #handling 0/2 errors
-    
-    if np.abs(diff) > 0:
+    print("Data reshaped to: ", data_shape)
+    if nbin > 1: printc(f'Data binned by a factor {nbin:d}',color=bcolors.WARNING)
+    # diff = int(2048//nbin-data_size[0]) #handling 0/2 errors
         
-        printc("WARNING: Dataset is cropped. Cropping will be considered the same for all the data", color=bcolors.WARNING)
-        start_row = int(hdr_arr[0]['PXBEG2']-1)
-        start_col = int(hdr_arr[0]['PXBEG1']-1)
-        # pxbeg1 and pxend1 do not take into account the inverted direction of the X axis in L1 data (FIXED)
-        # start_col = int((2048 - hdr_arr[0]['PXEND1'] + 1) - 1)
-        
-    else:
-        start_row, start_col = 0, 0
+    start_row = int((hdr_arr[0]['PXBEG2']-1)//nbin)
+    start_col = int((hdr_arr[0]['PXBEG1']-1)//nbin)
+    end_row = int(hdr_arr[0]['PXEND2']//nbin)
+    end_col = int(hdr_arr[0]['PXEND1']//nbin)
     
-    rows = slice(start_row,start_row + data_size[0])
-    cols = slice(start_col,start_col + data_size[1])
+    rows = slice(start_row,end_row)
+    cols = slice(start_col,end_col)
     ceny = slice(data_size[0]//2 - data_size[0]//4, data_size[0]//2 + data_size[0]//4)
     cenx = slice(data_size[1]//2 - data_size[1]//4, data_size[1]//2 + data_size[1]//4)
 
@@ -462,7 +460,7 @@ def phihrt_pipe(input_json_file):
 
     if flat_c:
         
-        flat, flat_pmp_temp, header_flat = load_and_process_flat(flat_f,accum_scaling,bit_conversion,scale_data,header_imgdirx_exists,imgdirx_flipped,cpos_arr,pmp_temp)
+        flat, flat_pmp_temp, header_flat = load_and_process_flat(flat_f,accum_scaling,bit_conversion,scale_data,header_imgdirx_exists,imgdirx_flipped,cpos_arr,nbin,pmp_temp)
 
     else:
         print(" ")
@@ -473,13 +471,14 @@ def phihrt_pipe(input_json_file):
     #-----------------
 
     if cavity_c:
-        
-        cavity = cavity_shifts(cavity_f,wave_axis_arr[0],slice(0,flat.shape[0]),slice(0,flat.shape[1]),False)
-
+        if flat_c:
+            cavity = load_cavity(cavity_f,wave_axis_arr[0],nbin,slice(0,flat.shape[0]),slice(0,flat.shape[1]),False)
+        else:
+            cavity = load_cavity(cavity_f,wave_axis_arr[0],nbin,slice(0,int(2048//nbin)),slice(0,int(2048//nbin)),False)
     else:
         cavity = None
         print(" ")
-        printc('-->>>>>>> No cavity compensation in Prefilter Correction',color=bcolors.WARNING)
+        printc('-->>>>>>> No cavity Correction',color=bcolors.WARNING)
 
     #-----------------
     # READ AND CORRECT DARK FIELD
@@ -534,21 +533,13 @@ def phihrt_pipe(input_json_file):
         # APPLY DARK CORRECTION 
         #-----------------  
 
-        if flat_c == False:
-            flat = np.empty((2048,2048,4,6))
-
-        data = apply_dark_correction(data, dark, rows, cols)  
+        data = apply_dark_correction(data, dark, rows, cols, nbin)  
         
-        if flat_c == False:
-            flat = np.empty((2048,2048,4,6))
-
         if out_intermediate:
             data_darkc = data.copy()
 
-        DID_dark = h['FILENAME']
-
         for hdr in hdr_arr:
-            hdr['CAL_DARK'] = DID_dark
+            hdr['CAL_DARK'] = h['FILENAME']
 
     else:
         print(" ")
@@ -575,10 +566,9 @@ def phihrt_pipe(input_json_file):
             wave_flat = compare_cpos(wave_flat,cpos_f,cpos_arr[0])
             Tetalon_flat = header_flat['FGOV1PT1']
             if os.path.isfile(prefilter_f):
-               flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],prefilter,Tetalon=Tetalon_flat,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity)[...,0]
+               flat = prefilter_correction(flat[...,np.newaxis],[wave_flat],prefilter,Tetalon=Tetalon_flat,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=cavity,nbin=nbin)[...,0]
             else:
-                flat = prefilter_correction_WLS(flat[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),Tetalon=Tetalon_flat, prefilter_f=prefilter_f)[...,0]
-            
+                flat = prefilter_correction_WLS(flat[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),Tetalon=Tetalon_flat, prefilter_f=prefilter_f,nbin=nbin)[...,0]
     else:
         print(" ")
         prefilter_c = False
@@ -595,7 +585,7 @@ def phihrt_pipe(input_json_file):
 
         start_time = time.perf_counter()
 
-        flat = unsharp_masking(flat,sigma,flat_pmp_temp,cpos_arr,clean_mode, clean_f = "blurring")
+        flat = unsharp_masking(flat,sigma/nbin,flat_pmp_temp,cpos_arr,clean_mode, clean_f = "blurring")
 
         for hdr in hdr_arr:
             hdr['CAL_USH'] = clean_mode
@@ -621,7 +611,7 @@ def phihrt_pipe(input_json_file):
             printc('-->>>>>>> Normalising flats over central region',color=bcolors.WARNING)
 
         else:
-            flat = normalise_flat(flat, slice(0,2048), slice(0,2048))
+            flat = normalise_flat(flat, slice(0,flat.shape[0]), slice(0,flat.shape[1]))
             # Test for temporary flat
             # flat = normalise_flat(flat, rows, cols)
             print(" ")
@@ -654,7 +644,6 @@ def phihrt_pipe(input_json_file):
             printc('--------------------------------------------------------------',bcolors.OKGREEN)
         except: 
           printc("ERROR, Unable to apply flat fields",color=bcolors.FAIL)
-
     else:
         print(" ")
         printc('-->>>>>>> No flat field correction mode',color=bcolors.WARNING)
@@ -674,9 +663,9 @@ def phihrt_pipe(input_json_file):
                     print('Flipping prefilter on the Y axis')
                     prefilter = prefilter[:,::-1]
                 
-            data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],Tetalon=Tetalon,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=None)
+            data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],Tetalon=Tetalon,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=None,nbin=nbin)
         else:
-            data = prefilter_correction_WLS(data,wave_axis_arr,rows,cols, Tetalon=Tetalon, prefilter_f=prefilter_f)
+            data = prefilter_correction_WLS(data,wave_axis_arr,rows,cols, Tetalon=Tetalon, prefilter_f=prefilter_f,nbin=nbin)
         
         for hdr in hdr_arr:
             hdr['CAL_PRE'] = prefilter_f
@@ -698,7 +687,7 @@ def phihrt_pipe(input_json_file):
     #-----------------
 
     if fs_c:
-        _, field_stop = apply_field_stop(data, rows, cols, header_imgdirx_exists, imgdirx_flipped)
+        _, field_stop = apply_field_stop(data, rows, cols, header_imgdirx_exists, imgdirx_flipped, nbin)
         if ghost_c:
             field_stop_ghost = load_ghost_field_stop(header_imgdirx_exists, imgdirx_flipped)
         
@@ -715,7 +704,7 @@ def phihrt_pipe(input_json_file):
     # New values are the median of the contour of each pixel
     
     if hot_px_mask:
-        data = hot_pixel_mask(data, rows, cols)
+        data = hot_pixel_mask(data, rows, cols, nbin=nbin)
         print(" ")
         printc('-->>>>>>> Hot Pixel Mask',color=bcolors.OKGREEN)
         if out_intermediate and prefilter_c:
@@ -777,7 +766,7 @@ def phihrt_pipe(input_json_file):
 
         for hdr in hdr_arr:
             hdr['CAL_IPOL'] = 'HRT'+pmp_temp
-        
+
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
         printc(f"------------- Demodulation time: {np.round(time.perf_counter() - start_time,3)} seconds ",bcolors.OKGREEN)
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
@@ -808,7 +797,7 @@ def phihrt_pipe(input_json_file):
         for scan in range(data_shape[-1]):
            
             try:
-                AR_temp = ARmasking(data[...,scan], field_stop[rows,cols], cpos = cpos_arr[scan]) # for ellipse limb fit
+                AR_temp = ARmasking(data[...,scan], field_stop[rows,cols], cpos = cpos_arr[scan], net = True) # for ellipse limb fit
                 if iss_off: # no need to re-run the high contrast ROI search
                     limb_temp, _, _, side, limb_percent_temp, ellipse_fit = limb_ellipse(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],AR_temp,percent=True,high_contrast=False,fit_results=True)
                 else:
@@ -870,14 +859,33 @@ def phihrt_pipe(input_json_file):
             # # erosion and dilation to remove small scale masked elements
             # AR_temp = ~binary_dilation(binary_erosion(~AR_temp.copy(),generate_binary_structure(2,2), iterations=3),generate_binary_structure(2,2), iterations=3)
 
-            AR_temp = ARmasking(data[...,scan], limb_mask[:,:,scan], cpos = cpos_arr[scan], dilation_iter = 6)
+            AR_temp = ARmasking(data[...,scan], limb_mask[:,:,scan], cpos = cpos_arr[scan], dilation_iter = 6, net = (limb_temp is not None))
             ##################################################################
+            # from .plot_tools import show_image_array
+            # from matplotlib import pyplot as plt
+            # grayscales = [(0,2000)] + [(-10,10)]*3 # [1] + [0.01] * 3  # I, Q, U, V
+            # row_labels = ['I', 'Q', 'U', 'V']
+            # column_labels = ['{:.3f} nm'.format(wave) for wave in wave_axis_arr[0]]
+            # title = os.path.basename('Demodulated') 
+            # fig = show_image_array(
+            #     np.moveaxis(data[...,0],(2,3),(1,0)), h, grayscales, row_labels=row_labels,
+            #     column_labels=column_labels, fig_title=title)
+            # plt.show()
             
+            # from matplotlib import pyplot as plt
+            # plt.figure(figsize=(6,6),layout='tight')
+            # plt.imshow(data[:,:,0,cpos_arr[0],int(scan)],clim=(0,2000),cmap='gray')
+            # plt.contour(limb_mask[:,:,scan],colors='b')
+            # plt.contour(limb_percent_mask[...,scan],colors='c')
+            # plt.contour(AR_temp,colors='g')
+            # plt.show()
+            # exit()
             I_c[scan] = np.nanmean(data[Ic_temp*AR_temp*limb_percent_mask[...,scan],0,cpos_arr[0],int(scan)])
+            print('Continuum normalization:',round(I_c[scan],4))
             data[:,:,:,:,scan] = data[:,:,:,:,scan]/I_c[scan]
             Ic_mask[...,scan] = Ic_temp
             AR_mask[...,scan] = AR_temp
-            hdr_arr[scan]['CAL_NORM'] = round(I_c[scan],4) # DC 20211116
+            hdr_arr[scan]['CAL_NORM'] = round(I_c[scan],4)
         
         limb_mask = np.array(limb_mask, dtype=bool)
         limb_percent_mask = np.array(limb_percent_mask, dtype=bool)
@@ -890,6 +898,8 @@ def phihrt_pipe(input_json_file):
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
 
     else:
+        if out_intermediate and demod:
+            data_demod_normed = data.copy()
         print(" ")
         printc('-->>>>>>> No normalising Stokes mode',color=bcolors.WARNING)
 
@@ -1098,13 +1108,13 @@ def phihrt_pipe(input_json_file):
                                                rest=PSFstokes['method'], mask=mask, sly=psfy, slx=psfx,
                                                gamma2=PSFstokes['gamma2'], low_f=PSFstokes['low_f'], 
                                                aberr_cor=PSFstokes['aberration_correction'], straylight_corr=PSFstokes['straylight_correction'],
-                                               cavity=cavity[rows,cols], PD_f = PSFstokes['PD_f'])
+                                               cavity=cavity[rows,cols], PD_f = PSFstokes['PD_f'], nbin = nbin)
                 res_stokes, coefs, PSF, cavity = restore_results
             else:
                 restore_results = fran_restore(data[...,scan], PSFt, rest=PSFstokes['method'], mask=mask, sly=psfy, slx=psfx,
                                              gamma2=PSFstokes['gamma2'], low_f=PSFstokes['low_f'], aberr_cor=PSFstokes['aberration_correction'],
                                              straylight_corr=PSFstokes['straylight_correction'], 
-                                             cavity=None, PD_f = PSFstokes['PD_f'])
+                                             cavity=None, PD_f = PSFstokes['PD_f'], nbin = nbin)
                 res_stokes, coefs, PSF = restore_results
                 cavity = None
 
