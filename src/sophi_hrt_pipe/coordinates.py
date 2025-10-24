@@ -189,7 +189,7 @@ def translate_header(h,tvec,mode='crpix'):
         print('mode not valid\nreturn old header')
     return h
 
-def image_register(ref,im,subpixel=True,deriv=False,d=50):
+def image_register(ref,im,subpixel=True,deriv=False,d=50,verbose=True):
     """
     credits: Marco Stangalini (2010, IDL version). Adapted for Python by Daniele Calchetti.
     return shift as **(y,x)**
@@ -273,7 +273,7 @@ def image_register(ref,im,subpixel=True,deriv=False,d=50):
                 g, A = _gauss2dfit(r,mask)
                 break
             except RuntimeError as e:
-                print(f"Issue with gaussian fitting using mask with radius {d1}\nTrying new value...")
+                if verbose: print(f"Issue with gaussian fitting using mask with radius {d1}\nTrying new value...")
                 if d1 == dd[-1]:
                     raise RuntimeError(e)
         shifts[0] = A[5]
@@ -282,46 +282,32 @@ def image_register(ref,im,subpixel=True,deriv=False,d=50):
     del FT1, FT2
     return r, shifts
 
-def remap(ref_map, temp_map, out_shape = (1024,1024), verbose = False):
-    """reproject hmi map onto hrt with hrt pixel size and observer coordinates
-    
+def remap(ref_map, temp_map, out_shape = None):
+    """
+    reproject hmi map onto hrt with hrt pixel size and observer coordinates
+    from SO/PHI-HRT pipeline
     Parameters
     ----------
-    hrt_map : sunpy.map.GenericMap
-        hrt map
-    hmi_map : sunpy.map.GenericMap
-        hmi map
-    out_shape : tuple
-        shape of output map, default is (1024,1024) (default is only true near HRT = 0.5 au)
-    verbose : bool
-        if True, plot of the maps will be shown
-    
+    ref_map : sunpy.map.GenericMap
+        reference map
+    temp_map : sunpy.map.GenericMap
+        map to be remapped
+    out_shape : tuple, None
+        shape of output map, if None the out_shape is the shape of ref_map (Default: None)
+
     Returns
     -------
-    hmi_map : sunpy.map.GenericMap
-        reprojected hmi map
+    temp_remap : sunpy.map.GenericMap
+        remapped hmi map
     """
     import sunpy.map
     from reproject import reproject_adaptive
     from sunpy.coordinates import propagate_with_solar_surface
+    from astropy.wcs import WCS
 
-    # plot of the maps
-    if verbose:
-        plt.figure(figsize=(9,5))
-        plt.subplot(121,projection=temp_map)
-        temp_map.plot()
-        temp_map.draw_limb()
-        top_right = temp_map.world_to_pixel(ref_map.top_right_coord)
-        bottom_left = temp_map.world_to_pixel(ref_map.bottom_left_coord)
-        temp_map.draw_quadrangle(np.array([bottom_left.x.value,bottom_left.y.value])*u.pix,
-                          top_right=np.array([top_right.x.value,top_right.y.value])*u.pix, edgecolor='yellow')
+    if out_shape is None:
+        out_shape = ref_map.data.shape
 
-        plt.subplot(122,projection=ref_map)
-        ref_map.plot()
-        ref_map.draw_limb()
-
-        plt.show()
-    
     # define new header for hmi map using hrt observer coordinates
     with propagate_with_solar_surface():
         out_header = sunpy.map.make_fitswcs_header(
@@ -341,42 +327,33 @@ def remap(ref_map, temp_map, out_shape = (1024,1024), verbose = False):
         out_header['crpix2'] = ref_map.fits_header['CRPIX2']
         out_header['crval1'] = ref_map.fits_header['CRVAL1']
         out_header['crval2'] = ref_map.fits_header['CRVAL2']
-        
-        if 'CROTA' in ref_map.fits_header:
-            out_header['crota2'] = ref_map.fits_header['CROTA']
-            out_header['crota'] = ref_map.fits_header['CROTA']
-        else:
-            out_header['crota2'] = ref_map.fits_header['CROTA2']
-            out_header['crota'] = ref_map.fits_header['CROTA2']
 
-        out_header['PC1_1'] = ref_map.fits_header['PC1_1']
-        out_header['PC1_2'] = ref_map.fits_header['PC1_2']
-        out_header['PC2_1'] = ref_map.fits_header['PC2_1']
-        out_header['PC2_2'] = ref_map.fits_header['PC2_2']
+        if 'CROTA' in ref_map.fits_header:
+            key = 'CROTA'
+        else:
+            key = 'CROTA2'
+        out_header[key] = ref_map.fits_header[key]
+
+        if 'PC1_1' in ref_map.fits_header:
+            out_header['PC1_1'] = ref_map.fits_header['PC1_1']
+            out_header['PC1_2'] = ref_map.fits_header['PC1_2']
+            out_header['PC2_1'] = ref_map.fits_header['PC2_1']
+            out_header['PC2_2'] = ref_map.fits_header['PC2_2']
+        else:
+            out_header['PC1_1'] = np.cos(ref_map.fits_header[key]*np.pi/180)
+            out_header['PC1_2'] = -np.sin(ref_map.fits_header[key]*np.pi/180)
+            out_header['PC2_1'] = np.sin(ref_map.fits_header[key]*np.pi/180)
+            out_header['PC2_2'] = np.cos(ref_map.fits_header[key]*np.pi/180)
 
         out_wcs = WCS(out_header)
-        
+
         # reprojection
         temp_origin = temp_map
-        output, footprint = reproject_adaptive(temp_origin, out_wcs, out_shape,kernel='Hann',boundary_mode='ignore')
-        temp_map = sunpy.map.Map((output, out_header))
-    temp_map.plot_settings = temp_origin.plot_settings
+        output, _ = reproject_adaptive(temp_origin, out_wcs, out_shape,kernel='Hann',boundary_mode='ignore')
+        temp_remap = sunpy.map.Map((output, out_header))
+    temp_remap.plot_settings = temp_origin.plot_settings
 
-    # plot reprojected maps
-    if verbose:
-        fig = plt.figure(figsize=(10,6))
-        ax1 = fig.add_subplot(1, 2, 1, projection=temp_map)
-        temp_map.plot(axes=ax1, title='SDO/HMI image as seen from PHI/HRT')
-        temp_map.draw_limb(color='blue')
-        ax2 = fig.add_subplot(1, 2, 2, projection=ref_map)
-        ref_map.plot(axes=ax2)
-        # Set the HPC grid color to black as the background is white
-        ax1.coords[0].grid_lines_kwargs['edgecolor'] = 'k'
-        ax1.coords[1].grid_lines_kwargs['edgecolor'] = 'k'
-        ax2.coords[0].grid_lines_kwargs['edgecolor'] = 'k'
-        ax2.coords[1].grid_lines_kwargs['edgecolor'] = 'k'
-    
-    return temp_map
+    return temp_remap
 
 def subregion_selection(ht,start_row,start_col,original_shape,dsmax = 512,edge = 20):
     intcrpix1 = int(round(ht['CRPIX1']))
@@ -448,7 +425,7 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
 
         kwlist = ['T_REC','T_OBS','DATE-OBS','CADENCE','DSUN_OBS']
         
-        client = drms.Client(email=jsoc_email, verbose=True) 
+        client = drms.Client(email=jsoc_email) 
 
         lt = np.nan
         n = 0
