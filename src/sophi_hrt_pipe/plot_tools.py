@@ -228,7 +228,7 @@ def plot_l2_pdf(path,did,version=None,save_output=True,plot_noise=True,plot_stok
     if version == '*':
         version = 'V'+h['VERSION']
     if save_output:
-        save_file = os.path.join(path, f'{did}_{version}.pdf')
+        save_file = os.path.join(path, f'plots_solo_L2_phi-hrt_{datfile.split('_')[-3]}_{did}_{version}.pdf')
         p = PdfPages(save_file)
 
     # # -----------------------------------------------------------------------------
