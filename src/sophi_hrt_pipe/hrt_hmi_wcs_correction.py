@@ -172,7 +172,7 @@ def correction(hrt_map, hmi_map, deriv=False,verbose=False,max_iterations = 10):
             break
     
     hrt_map = sunpy.map.Map((und_hrt,ht))
-    # fdt_remap = remap(hrt_map, fdt_map, out_shape = hrt_map.data.shape, verbose=verbose)
+    
     hrt_remap = remap(hmi_submap, hrt_map, out_shape = hmi_submap.data.shape)
 
     ht['DATE-BEG'] = h_hrt['DATE-BEG']

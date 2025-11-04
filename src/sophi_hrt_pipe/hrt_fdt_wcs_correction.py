@@ -191,7 +191,7 @@ def correction(hrt_map, fdt_map, deriv=False,verbose=False,max_iterations = 10):
                 tt = fdt_submap.data; tt[mask==0] = 0
                 fdt_submap = sunpy.map.Map((tt,fdt_submap.fits_header)); del tt
 
-                hrt_remap = remap(fdt_submap, hrt_map, out_shape = fdt_submap.data.shape, verbose=False)
+                hrt_remap = remap(fdt_submap, hrt_map, out_shape = fdt_submap.data.shape)
 
                 if verbose:
                     plot_fdt_hrt(fdt_submap, hrt_remap)
@@ -245,8 +245,8 @@ def correction(hrt_map, fdt_map, deriv=False,verbose=False,max_iterations = 10):
             break
     
     hrt_map = sunpy.map.Map((und_hrt,ht))
-    # fdt_remap = remap(hrt_map, fdt_map, out_shape = hrt_map.data.shape, verbose=verbose)
-    hrt_remap = remap(fdt_submap, hrt_map, out_shape = fdt_submap.data.shape, verbose=False)
+    # fdt_remap = remap(hrt_map, fdt_map, out_shape = hrt_map.data.shape)
+    hrt_remap = remap(fdt_submap, hrt_map, out_shape = fdt_submap.data.shape)
 
     ht['DATE-BEG'] = h_hrt['DATE-BEG']
     ht['DATE-OBS'] = h_hrt['DATE-OBS']
