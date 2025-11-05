@@ -13,7 +13,7 @@ import datetime
 from astropy import units as u
 from astropy.wcs import WCS
 
-from .utils import circular_mask, und, Inv2, fits_get_sampling, fft_shift, printc, bcolors
+from .utils import circular_mask, und, Inv2, fits_get_sampling, fft_shift, printc, bcolors, image_derivative
 
 def mu_angle(hdr,coord=None):
     """get mu angle for a pixel
@@ -199,20 +199,6 @@ def image_register(ref,im,subpixel=True,deriv=False,d=50,verbose=True):
     except:
         import numpy.fft as fft
         
-    def _image_derivative(d):
-        import numpy as np
-        from scipy.signal import convolve
-        kx = np.asarray([[1,0,-1], [1,0,-1], [1,0,-1]])
-        ky = np.asarray([[1,1,1], [0,0,0], [-1,-1,-1]])
-        kx=kx/3.
-        ky=ky/3.
-        SX = convolve(d, kx,mode='same')
-        SY = convolve(d, ky,mode='same')
-#         A=SX+SY
-        # DC change on 12/07/2022
-        A=SX**2+SY**2
-        return A
-
     def _g2d(X, offset, amplitude, sigma_x, sigma_y, xo, yo, theta):
         import numpy as np
         (x, y) = X
@@ -250,8 +236,8 @@ def image_register(ref,im,subpixel=True,deriv=False,d=50,verbose=True):
         return array/np.sqrt((np.abs(array)**2).mean())
 
     if deriv:
-        ref = _image_derivative(ref - np.mean(ref))
-        im = _image_derivative(im - np.mean(im))
+        ref = image_derivative(ref - np.mean(ref))
+        im = image_derivative(im - np.mean(im))
         
     shifts=np.zeros(2)
     FT1=fft.fftn(ref - np.mean(ref))

@@ -1,9 +1,9 @@
 import numpy as np
 from matplotlib import pyplot as plt
 from astropy.io import fits
-from .utils import find_nearest, printc, bcolors
+from .utils import find_nearest, printc, bcolors, image_derivative
 from .coordinates import rotate_header, translate_header, center_coord, circular_mask, remap, fft_shift, image_register, Inv2, und
-from .processes import limb_side_finder, elliptical_mask
+from .processes import limb_side_finder, elliptical_mask, double_gaussian_fit
 # import argparse
 from datetime import datetime as DT
 from datetime import timedelta as TD
@@ -79,6 +79,137 @@ def closestFDT(filename):
     fdt_filename = fdt_files[ind]
 
     return fdt_filename, descriptor
+
+def limb_fixedR(img, hdr, field_stop, AR_mask):
+    """Fits limb to the image using least squares method.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Image to fit limb to.
+    hdr : astropy.io.fits.header.Header
+        header of fits file
+    field_stop : array
+        field stop array
+    AR_mask : array
+        AR mask array
+    
+    Returns
+    -------
+    output: dictionary
+        Output with most of the variables and outputs of the procedure.
+
+    """
+
+    def _residuals(p,x,y):
+        """
+        Finding the residuals of the fit
+
+        Parameters
+        ----------
+        p : list
+            [a,b,h,k,A] - ellipse axes (x,y), centers (x,y) and angle
+        x : float
+            test x coordinate
+        y : float
+            test y coordinate
+
+        Returns
+        -------
+        residual = ((x-h)*np.cos(A)+(y-k)*np.sin(A))**2/a**2 + (-(x-h)*np.sin(A)+(y-k)*np.cos(A))**2/b**2 - 1
+        """
+
+        a,b,h,k,A = p
+        residual = ((x-h)*np.cos(A)+(y-k)*np.sin(A))**2/a**2 + (-(x-h)*np.sin(A)+(y-k)*np.cos(A))**2/b**2 - 1
+
+        return residual
+
+    from scipy.optimize import least_squares
+    from scipy.ndimage import binary_erosion, binary_dilation
+
+    side, center, Rpix, sly, slx = limb_side_finder(img,hdr,verbose=False)
+
+    s = 5
+    temp = img[s:-s,s:-s][AR_mask[s:-s,s:-s]>0].flatten()
+    hi = np.histogram(temp,bins=np.linspace(-0.07,temp.max(),100)); del temp
+    gres, cov = double_gaussian_fit(hi,False,True)
+    
+    if (np.any((np.sqrt(np.diagonal(cov))/gres)[:3] > 100) or np.any(np.isnan(cov))) or gres[1] > gres[4]*0.7: # sometimes south pole limb is not found, so extra condition on fit
+        printc('Despite the WCS, it looks like the Limb is not in the FoV',bcolors.WARNING)
+        
+        return {'hi':hi,'gres':gres,'cov':cov,'center':center,'Rpix':Rpix}
+
+    xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
+    thr = xx[find_nearest(xx,min(gres[1],gres[4]))+np.argmin(hi[0][find_nearest(xx,min(gres[1],gres[4])):find_nearest(xx,max(gres[1],gres[4]))])]
+
+    limb_mask = img[s:-s,s:-s]>thr;
+    
+    # dilation and erosion to remove any possible zeros coming from umbrae
+    # border_value=1 in erosion to avoid black edges
+    limb_mask = binary_erosion(binary_dilation(limb_mask,[[0,1,0],[1,1,1],[0,1,0]],iterations=20),[[0,1,0],[1,1,1],[0,1,0]],iterations=20,border_value=1)
+    
+    # erosion of field stop and AR_mask to avoid edges from there
+    limb_edge = image_derivative(limb_mask)*binary_erosion(field_stop,[[0,1,0],[1,1,1],[0,1,0]],iterations=20)[s:-s,s:-s]\
+                                           *binary_erosion(AR_mask,[[0,1,0],[1,1,1],[0,1,0]],iterations=20)[s:-s,s:-s]
+    yi, xi = np.where(limb_edge>0.9)
+    yi += s; xi += s;
+    # max gradient along small vertical cuts
+    if 'N' in side or 'S' in side:
+        # print('N or S')
+        xi,ar = np.unique(xi,return_index=True)
+        yi = yi[ar]
+        delta = 20
+        img_der = image_derivative(img)
+        cut = np.zeros((delta*2,img.shape[1]))
+        new_yi = yi-delta
+        count = 0
+        for x0,y0 in zip(xi,yi):
+            cut[:,x0] = img_der[y0-delta:y0+delta,x0]
+            new_yi[count] += cut[:,x0].argmax()
+            count += 1
+        yi = new_yi
+
+    # max gradient along small vertical cuts
+    elif 'E' in side or 'W' in side:
+        # print('E or W')
+        yi,ar = np.unique(yi,return_index=True)
+        xi = xi[ar]
+        delta = 20
+        img_der = image_derivative(img)
+        cut = np.zeros((img.shape[0],delta*2))
+        new_xi = xi-delta
+        count = 0
+        for x0,y0 in zip(xi,yi):
+            cut[y0] = img_der[y0,x0-delta:x0+delta]
+            new_xi[count] += cut[y0].argmax()
+            count += 1
+        xi = new_xi
+    
+    p = least_squares(_residuals,x0 = [Rpix,Rpix,center[0],center[1],0], args=(xi,yi),
+                              bounds = ([Rpix-.1,Rpix-.1,center[0]-1000,center[1]-1000,-np.pi/2],[Rpix+.1,Rpix+.1,center[0]+1000,center[1]+1000,np.pi/2]))
+
+    mask100 = elliptical_mask(img.shape,p.x)
+    mask98 = elliptical_mask(img.shape,[p.x[0]*.98,p.x[1]*.98,p.x[2],p.x[3],p.x[4]])
+    mask96 = elliptical_mask(img.shape,[p.x[0]*.96,p.x[1]*.96,p.x[2],p.x[3],p.x[4]])
+    
+    return {'mask100':mask100,'mask96':mask96,'hi':hi,'gres':gres,'thr':thr,'xx':xx,'limb_mask':limb_mask,'limb_edge':limb_edge,'yi':yi,'xi':xi,'p':p}
+    
+def correct_wcs_with_limb(img, hdr, field_stop, AR_mask):
+    good = False
+    try:
+        out = limb_fixedR(img, hdr, field_stop, AR_mask)
+        p = out['p'].x.copy()
+        crota_manual_correction=0.15
+        h_hrt = rotate_header(hdr.copy(),-crota_manual_correction, center=[p[2],p[3]])
+        center = center_coord(h_hrt)
+        shift_center = [round(p[3] - center[1]), round(p[2] - center[0])] # (y,x)
+        h_hrt = translate_header(h_hrt.copy(),np.asarray(shift_center), mode='crval')
+        good = True
+    except Exception as e:
+        printc(f"There was an error in the WCS correction using the limb. This is the error: {e}", color=bcolors.FAIL)
+        good = False
+        h_hrt = hdr.copy()
+    return h_hrt, good
 
 def prepare_data(hrt_file, fdt_file, crota_manual_correction=0.15, undistortion=False, verbose=False):
     if isinstance(hrt_file, str):

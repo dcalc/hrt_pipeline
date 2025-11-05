@@ -14,7 +14,7 @@ from .processes import setup_header, apply_dark_correction, load_and_process_fla
 
 from .inversions import generate_l2, create_output_filenames, CE_output
 from .coordinates import muSO_map
-from .hrt_fdt_wcs_correction import run_FDT_correction, get_descriptor
+from .hrt_fdt_wcs_correction import run_FDT_correction, get_descriptor, correct_wcs_with_limb
 from .hrt_fdt_wcs_correction import VERSION as wcs_version
 
 from .PSF import fran_restore
@@ -859,7 +859,7 @@ def phihrt_pipe(input_json_file):
             # # erosion and dilation to remove small scale masked elements
             # AR_temp = ~binary_dilation(binary_erosion(~AR_temp.copy(),generate_binary_structure(2,2), iterations=3),generate_binary_structure(2,2), iterations=3)
 
-            AR_temp = ARmasking(data[...,scan], limb_mask[:,:,scan], cpos = cpos_arr[scan], dilation_iter = 6, net = (limb_temp is not None))
+            AR_temp = ARmasking(data[...,scan], limb_mask[:,:,scan], cpos = cpos_arr[scan], dilation_iter = 6, net = (limb_temp is not None), keep_initial=False)
             ##################################################################
             # from .plot_tools import show_image_array
             # from matplotlib import pyplot as plt
@@ -1201,20 +1201,30 @@ def phihrt_pipe(input_json_file):
     if wcs_update:
         for scan in range(data_shape[-1]):
             htemp = hdr_arr[scan].copy()
-            out_ce = CE_output(data[...,scan].copy(), wave_axis_arr[scan], cpos_arr[scan])
-            im = out_ce[2]*np.cos(out_ce[3]*np.pi/180); del out_ce
-            if wcs_update.lower() == 'fdt':
-                printc('-->>>>>>> Running FDT WCS correction on the BLOS file',bcolors.OKGREEN)
-                new_wcs = run_FDT_correction(im*limb_mask[...,scan], htemp, False, print_values=True)
-            
-            for k,v in new_wcs.items():
-                if v[0] is not None:
-                    hdr_arr[scan][k] = v[0]
-                    add_history = 'WCS updated by HRT pipeline using '+wcs_update.upper()+', S/W version: '+wcs_version+'. Check parent file for old WCS.'
+            if limb_temp is not None:
+                printc('-->>>>>>> Running WCS correction with limb fitting',bcolors.OKGREEN)
+                hdr_arr[scan], good = correct_wcs_with_limb(data[:,:,0,cpos_arr[0],scan], htemp, field_stop[rows,cols], AR_mask[:,:,scan])
+                if good:
+                    add_history = 'WCS updated by HRT pipeline using a more precise limb fitting. Check parent file for old WCS'
                     hdr_arr[scan]['CAL_WCS'] = True
-                else:
-                    add_history = 'WCS not updated by HRT pipeline. Issue during the correction. S/W version: '+wcs_version
-                    hdr_arr[scan]['CAL_WCS'] = False
+            else:
+                good = False
+            
+            if not good:
+                out_ce = CE_output(data[...,scan].copy(), wave_axis_arr[scan], cpos_arr[scan])
+                im = out_ce[2]*np.cos(out_ce[3]*np.pi/180); del out_ce
+                if wcs_update.lower() == 'fdt':
+                    printc('-->>>>>>> Running FDT WCS correction on the BLOS file',bcolors.OKGREEN)
+                    new_wcs = run_FDT_correction(im*limb_mask[...,scan], htemp, False, print_values=True)
+                
+                for k,v in new_wcs.items():
+                    if v[0] is not None:
+                        hdr_arr[scan][k] = v[0]
+                        add_history = 'WCS updated by HRT pipeline using '+wcs_update.upper()+', S/W version: '+wcs_version+'. Check parent file for old WCS.'
+                        hdr_arr[scan]['CAL_WCS'] = True
+                    else:
+                        add_history = 'WCS not updated by HRT pipeline. Issue during the correction. S/W version: '+wcs_version
+                        hdr_arr[scan]['CAL_WCS'] = False
             
             hdr_arr[scan]['HISTORY'] = add_history
 

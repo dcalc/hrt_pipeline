@@ -649,7 +649,7 @@ def filling_data(arr, thresh, mode, axis = -1):
                     a0[:,i] = a1
     return a0
     
-def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_iter = 3, dilation_iter = 3, closing_iter = 20, net = False):
+def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_iter = 3, dilation_iter = 3, closing_iter = 20, net = False, keep_initial=True):
     """Creates a mask to cover active parts of the FoV
     Parameters
     ----------
@@ -671,6 +671,8 @@ def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_it
         number of iterations for the closing of the mask (DEFAULT: 20)    
     net: bool
         if True, it uses the polarizaion maps minus the continuum (to avoid ghost) (DEFAULT: False)
+    keep_initial: bool
+        if True, the initial mask will be in the AR mask (DEFAULT: True)
     
     Returns
     -------
@@ -705,11 +707,15 @@ def ARmasking(stk, initial_mask, cpos = 0, bin_lim = 7, mask_lim = 5, erosion_it
     # plt.show()
     AR_mask = np.asarray(AR_mask, dtype=bool)
 
+    # remove initial mask from AR mask
+    if not keep_initial:
+        AR_mask[initial_mask==0] = 1
+
     # erosion and dilation to remove small scale masked elements
     AR_mask = ~binary_closing(binary_dilation(binary_erosion(~AR_mask.copy(),generate_binary_structure(2,2), iterations=erosion_iter),
                                generate_binary_structure(2,2), iterations=dilation_iter),generate_binary_structure(2,2), iterations=closing_iter)
-    
-    AR_mask = AR_mask * initial_mask
+    if keep_initial:
+        AR_mask = AR_mask * initial_mask
 
     # plt.figure()
     # plt.imshow(AR_mask,origin='lower')
