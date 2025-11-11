@@ -163,7 +163,7 @@ def correction(hrt_map, hmi_map, deriv=False,verbose=False,max_iterations = 10):
         ht = translate_header(ht.copy(),-np.asarray(shift)*hmi_submap.fits_header['CDELT1']/hrt_map.fits_header['CDELT1'] * \
                                         hmi_map.fits_header['DSUN_OBS']/hrt_map.fits_header['DSUN_OBS'],
                                         mode='crval')
-        print(it,'iterations shift (x,y):',round(shift[1],2),round(shift[0],2))
+        print(it,'iterations shift HMI detector frame (x,y):',round(shift[1],2),round(shift[0],2))
 
         i+=1
         if i == max_iterations:
@@ -219,7 +219,7 @@ def plot_fdt_hrt(fdt_map, hrt_map):
 
 def run_HMI_correction(data, header, verbose = False, **kwargs):
 
-    parameters = dict(filename = None, print_values = False, hmi_path = None)
+    parameters = dict(filename = None, print_values = False, hmi_path = None, crota_manual_correction = 0.15)
     parameters = {**parameters, **kwargs}
 
     if parameters['filename'] is not None:
@@ -268,9 +268,9 @@ def run_HMI_correction(data, header, verbose = False, **kwargs):
         # print(f'Processing the file: {filename}')
 
         if parameters['filename'] is not None:
-            hrt_map, hmi_map_rot = prepare_data(f, hmi_map, 0.15, undistortion=False, verbose=False)
+            hrt_map, hmi_map_rot = prepare_data(f, hmi_map, parameters['crota_manual_correction'], undistortion=False, verbose=False)
         else:
-            hrt_map, hmi_map_rot = prepare_data((data,header), hmi_map, 0.15, undistortion=False, verbose=False)
+            hrt_map, hmi_map_rot = prepare_data((data,header), hmi_map, parameters['crota_manual_correction'], undistortion=False, verbose=False)
 
         # try:
         hrt_map, hrt_remap, n, t0 = correction(hrt_map, hmi_map_rot, deriv=False,verbose=False)
