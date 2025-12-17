@@ -19,6 +19,11 @@ from .hrt_fdt_wcs_correction import VERSION as wcs_version
 
 from .PSF import fran_restore
 
+import warnings
+import astropy
+warnings.filterwarnings("ignore", category=astropy.utils.exceptions.AstropyDeprecationWarning)
+warnings.filterwarnings("ignore", category=astropy.wcs.FITSFixedWarning)
+
 def phihrt_pipe(input_json_file):
 
     '''
