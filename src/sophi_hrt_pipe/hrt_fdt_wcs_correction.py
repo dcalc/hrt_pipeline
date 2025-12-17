@@ -194,12 +194,11 @@ def limb_fixedR(img, hdr, field_stop, AR_mask):
     
     return {'mask100':mask100,'mask96':mask96,'hi':hi,'gres':gres,'thr':thr,'xx':xx,'limb_mask':limb_mask,'limb_edge':limb_edge,'yi':yi,'xi':xi,'p':p}
     
-def correct_wcs_with_limb(img, hdr, field_stop, AR_mask):
+def correct_wcs_with_limb(img, hdr, field_stop, AR_mask, crota_manual_correction=0.15):
     good = False
     try:
         out = limb_fixedR(img, hdr, field_stop, AR_mask)
         p = out['p'].x.copy()
-        crota_manual_correction=0.15
         h_hrt = rotate_header(hdr.copy(),-crota_manual_correction, center=[p[2],p[3]])
         center = center_coord(h_hrt)
         shift_center = [round(p[3] - center[1]), round(p[2] - center[0])] # (y,x)

@@ -1028,7 +1028,7 @@ def gaus(x,a,x0,sigma):
     return a*np.exp(-(x-x0)**2/(2*sigma**2))
 
 
-def gaussian_fit(a,show=True):
+def gaussian_fit(a,show=True,ax=None):
     """Gaussian fit for data 'a' from np.histogram or plt.hist
 
     Parameters
@@ -1037,7 +1037,8 @@ def gaussian_fit(a,show=True):
         output from np.histogram
     show : bool, optional
         show plot of fit, by default True
-    
+    ax: axes, optional
+        input axes to plot the fit result. If None, select the current axes (Default: None)
     Returns
     -------
     p : array
@@ -1051,8 +1052,10 @@ def gaussian_fit(a,show=True):
         p,cov=spo.curve_fit(gaus,xx,y,p0=p0)
         if show:
             lbl = '{:.2e} $\pm$ {:.2e}'.format(p[1],p[2])
-            plt.plot(xx,gaus(xx,*p),'r--', label=lbl)
-            plt.legend(fontsize=9)
+            if ax is None:
+                ax = plt.gca()
+            ax.plot(xx,gaus(xx,*p),'r--', label=lbl)
+            ax.legend(fontsize=9)
         return p
     except:
         printc("Gaussian fit failed: return initial guess",color=bcolors.WARNING)

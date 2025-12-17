@@ -723,7 +723,7 @@ def flat_correction(data,flat,flat_states,cpos_arr,flat_pmp_temp=50,rows=slice(0
         printc("ERROR, Unable to apply flat fields",color=bcolors.FAIL)
 
 
-def prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_flipped = 'YES', prefilter_f = '/data/slam/oba/prefilter/', nbin = 1):
+def prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_flipped = 'YES', prefilter_f = '/data/slam/oba/prefilter/', filename = [''], nbin = 1):
     """
     New prefilter correction based on TO email on 2025-02-26
     Based on wavelength scans on 2024-07-10
@@ -742,6 +742,8 @@ def prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_fli
         check if data have been flipped (all the hrt-L1 data are flipped), DEFAULT = 'YES'
     prefilter_f: str
         directory where to find the prefilter files, DEFAULT = '/data/slam/oba/prefilter/'
+    filename: list
+        filled in the function with the filename of the selected prefilter. DEFAULT = ''
     nbin: int
         binning factor, must be a power of 2, DEFAULT = 1
     
@@ -775,13 +777,17 @@ def prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_fli
     if int(round(Tetalon)) == 56:
         prefilter = fits.getdata(pf56_f) # (51,2048,2048)
         prefilter_wave = fits.getdata(wl56_f) # (51,)
+        filename[0] = pf56_f.split('/')[-1]
     elif int(round(Tetalon)) == 61:
         prefilter = fits.getdata(pf61_f) # (51,2048,2048)
         prefilter_wave = fits.getdata(wl61_f) # (51,)
+        filename[0] = pf61_f.split('/')[-1]
     elif int(round(Tetalon)) == 66:
         prefilter = fits.getdata(pf66_f) # (51,2048,2048)
         prefilter_wave = fits.getdata(wl66_f) # (51,)
+        filename[0] = pf66_f.split('/')[-1]
     else:
+        filename[0] = None
         printc(f'The Etalon temperature is not in [56,61,66], but it is {int(round(Tetalon))}. No Prefilter correction applied',bcolors.WARNING)
         return data
     

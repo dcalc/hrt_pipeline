@@ -331,7 +331,7 @@ def write_output_inversion(rte_data_products, synthetic_stokes, file_path, scan,
             hdu_list[0].data = synthetic_stokes.astype(np.float32)
             hdu_list.writeto(out_dir+syn_file, overwrite=True)
 
-def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_flipped, out_rte_filename, out_dir, cavity_f = None, mu = None, rows = slice(0,2048), cols = slice(0,2048), vers = '01', out_synthesis = False, wcs_update = False, rte = "CE+RTE+PSF", pymilos = True, options = [], weight=np.asarray([1.,4.,5.4,4.1]), initial_model=np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]), parallel = False, num_workers = 20):
+def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_flipped, out_rte_filename, out_dir, cavity_f = None, mu = None, rows = slice(0,2048), cols = slice(0,2048), vers = '01', out_synthesis = False, wcs_update = False, rte = "CE+RTE+PSF", pymilos = True, options = [], weight=np.asarray([1.,4.,5.4,4.1]), initial_model=np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]), parallel = False, num_workers = 20, median = 0):
     """Pre-process each scan and call `run_pymilos` for each scan in the data set.
     
     Parameters
@@ -368,7 +368,9 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
         Weights for the inversion. The default is np.asarray([1.,4.,5.4,4.1]). See `run_pymilos` for more information.
     initial_model : ndarray, optional
         Initial model for the inversion. The default is np.asarray([400,30,120,1,0.05,1.5,.01,.22,.85]). See `run_pymilos` for more information.
-
+    median : int, optional
+        If >0, re-run the inversion pixel by pixel after a median filter of size `median` is applied to the results. The default is 0.
+    
     Returns
     -------
     None.
@@ -491,6 +493,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
                 initial_model = [initial_model,initial_model]
             # make AR mask
             # AR
+            # options[2] = 0 # no CE for AR
             rte_invs0 = pym.phi_rte(sdata.copy(),
                     wave_axis,
                     rte_mode=rte,
@@ -505,6 +508,7 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
                     parallel=parallel, num_workers=num_workers)
 
             # QS
+            # options[2] = 1 # CE input for QS
             rte_invs1 = pym.phi_rte(sdata.copy(),
                     wave_axis,
                     rte_mode=rte,
@@ -520,7 +524,85 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
 
             rte_invs = rte_invs1*ar_mask+rte_invs0*(~ar_mask)
         
+            if median:
+                # re-run the inversion pixel by pixel after a median filter on the result that is used as input_model
+                # it will be later implemented in MILOS
+                printc(f'  ---- >>>>> Re-running the inversion pixel by pixel after median filter of size {median} on the results .... ',color=bcolors.OKGREEN)
+                from scipy.ndimage import median_filter
+                input_model = np.zeros_like(rte_invs)
+                clips = [(None,None),
+                         (None,None),
+                         (20,3500), # B
+                         (1,179), # inclination
+                         (None,None), # azimuth
+                         (1,2000), # eta0
+                         (0,0.15), # dop width
+                         (0,9), # damping
+                         (-10,10), # vlos
+                         (0.01,1), # S0
+                         (0.01,1.4), # S1
+                         ]
+                for i in range(2,input_model.shape[0]-1):
+                    input_model[i] = np.clip(median_filter(rte_invs[i],median),*clips[i]) # median has been tested as 20
+                input_model[4] = input_model[4] % 180 # azimuth
 
+                model = np.zeros((ny,nx,rte_invs.shape[0]))
+                
+                new_options = options.copy()
+                new_options[1] = 50 # max iter
+                # new_options[7] = 0 # no re-run
+                new_options[2] = 0 # no CE as input
+                rte_new = rte.strip("CE+")
+                median_mask = rte_invs[-1] * mask[:,:,scan] > 0 # 1000
+                
+                if Nw == 1 and Nim == 1:
+                    rte_invs0 = pym.phi_rte(sdata.copy(),
+                                            wave_axis,
+                                            rte_mode=rte_new,
+                                            temp_dir=out_dir,
+                                            cmd=cmd,
+                                            options=new_options,
+                                            weight=np.asarray(weight),
+                                            mask=median_mask,
+                                            initial_model=initial_model[0],
+                                            initial_arr=input_model[2:-1],
+                                            cavity=cavity,
+                                            # mu=mu,
+                                            parallel=parallel, num_workers=num_workers)
+
+                    rte_invs[:,median_mask] = rte_invs0[:,median_mask]
+                else:
+                    rte_invs0 = pym.phi_rte(sdata.copy(),
+                                            wave_axis,
+                                            rte_mode=rte_new,
+                                            temp_dir=out_dir,
+                                            cmd=cmd,
+                                            options=new_options,
+                                            weight=np.asarray(weight[0]),
+                                            mask=median_mask*(~ar_mask),
+                                            initial_model=initial_model[0],
+                                            initial_arr=input_model[2:-1],
+                                            cavity=cavity,
+                                            # mu=mu,
+                                            parallel=parallel, num_workers=num_workers)
+
+                    rte_invs1 = pym.phi_rte(sdata.copy(),
+                                            wave_axis,
+                                            rte_mode=rte_new,
+                                            temp_dir=out_dir,
+                                            cmd=cmd,
+                                            options=new_options,
+                                            weight=np.asarray(weight[1]),
+                                            mask=median_mask*ar_mask,
+                                            initial_model=initial_model[1],
+                                            initial_arr=input_model[2:-1],
+                                            cavity=cavity,
+                                            # mu=mu,
+                                            parallel=parallel, num_workers=num_workers)
+
+                    rte_invs[:,median_mask] = (rte_invs1*ar_mask+rte_invs0*(~ar_mask))[:,median_mask]
+
+    
         """
         From 0 to 11
         Counter (PX Id)
@@ -567,10 +649,12 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
             hdr_scan['RTE_ITER'] = str(30)
         else:
             hdr_scan['RTE_ITER'] = options[1]
+        
         # if cavity_f is not None:
         #     hdr_scan['CAL_CAVM'] = cavity_f
         hdr_scan.set('RTE_W', str(weight).replace('\n',','), 'Polarimetric weights used in the RTE code', after='RTE_ITER')
         hdr_scan.set('RTE_INIT', str(initial_model), 'Initial model used in the RTE code', after='RTE_ITER')
+        hdr_scan.set('RTE_MED', median, 'Median filter size applied for a second run', after='RTE_INIT')
 
         if out_synthesis:
             printc(f'  ---- >>>>> Synthetising the Stokes profiles .... ',color=bcolors.OKGREEN)

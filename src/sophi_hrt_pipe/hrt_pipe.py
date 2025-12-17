@@ -122,7 +122,7 @@ def phihrt_pipe(input_json_file):
     pipeline_dir = os.path.realpath(__file__).split('src/')[0]
     repo = git.Repo(pipeline_dir)
     sha = repo.head.object.hexsha
-    version = 'V1.10.0 October 24th 2025'
+    version = 'V1.11.0 December 16th 2025'
 
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
     printc('PHI HRT data reduction software  ',bcolors.OKGREEN)
@@ -664,13 +664,15 @@ def phihrt_pipe(input_json_file):
                     prefilter = prefilter[:,::-1]
                 
             data = prefilter_correction(data,wave_axis_arr,prefilter[rows,cols],Tetalon=Tetalon,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=None,nbin=nbin)
+            prefilter_filename = prefilter_f.split('/')[-1]
         else:
-            data = prefilter_correction_WLS(data,wave_axis_arr,rows,cols, Tetalon=Tetalon, prefilter_f=prefilter_f,nbin=nbin)
-        
+            prefilter_filename = ['']
+            data = prefilter_correction_WLS(data,wave_axis_arr,rows,cols, Tetalon=Tetalon, prefilter_f=prefilter_f,filename=prefilter_filename,nbin=nbin)
+            prefilter_filename = prefilter_filename[0]
         for hdr in hdr_arr:
-            hdr['CAL_PRE'] = prefilter_f
+            hdr['CAL_PRE'] = prefilter_filename
         
-        if out_intermediate and ~hot_px_mask:
+        if out_intermediate and (not hot_px_mask):
             data_PFc = data.copy()
 
         printc('--------------------------------------------------------------',bcolors.OKGREEN)
@@ -1203,7 +1205,7 @@ def phihrt_pipe(input_json_file):
             htemp = hdr_arr[scan].copy()
             if limb_temp is not None:
                 printc('-->>>>>>> Running WCS correction with limb fitting',bcolors.OKGREEN)
-                hdr_arr[scan], good = correct_wcs_with_limb(data[:,:,0,cpos_arr[0],scan], htemp, field_stop[rows,cols], AR_mask[:,:,scan])
+                hdr_arr[scan], good = correct_wcs_with_limb(data[:,:,0,cpos_arr[0],scan], htemp, field_stop[rows,cols], AR_mask[:,:,scan], 0.15)
                 if good:
                     add_history = 'WCS updated by HRT pipeline using a more precise limb fitting. Check parent file for old WCS'
                     hdr_arr[scan]['CAL_WCS'] = True
@@ -1328,7 +1330,7 @@ def phihrt_pipe(input_json_file):
             hdr_unrec['DATAMAX'] = round(np.max(data_not_deconvolved[:,:,:,:,count]),1)
             hdr_unrec['PHIDTYPE'] = 'unrec'
             if cavity_c:
-                hdr_unrec['CAL_CAVM'] = cavity_f
+                hdr_unrec['CAL_CAVM'] = cavity_f.split('/')[-1]
             hdr_unrec = data_hdr_kw(hdr_unrec, data_not_deconvolved[:,:,:,:,count]) #add datamedn, datamean etc
             
             hdr_unrec['HISTORY'] = f"Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {ItoQUV}. PSF deconvolution: False."
@@ -1421,7 +1423,7 @@ def phihrt_pipe(input_json_file):
             hdr_arr[count]['DATAMAX'] = round(np.max(data[:,:,:,:,count]),1)
             hdr_arr[count]['PHIDTYPE'] = 'stokes'
             if cavity_c:
-                hdr_arr[count]['CAL_CAVM'] = cavity_f
+                hdr_arr[count]['CAL_CAVM'] = cavity_f.split('/')[-1]
             hdr_arr[count] = data_hdr_kw(hdr_arr[count], data[:,:,:,:,count]) #add datamedn, datamean etc
             hdr_interm = hdr_arr[count].copy()
             hdr_arr[count]['HISTORY'] = f"Version: {version}. Dark: {dark_c}. Prefilter: {prefilter_c}. Flat: {flat_c}, Unsharp: {clean_f}. Flat norm: {norm_f}. I->QUV ctalk: {ItoQUV}. PSF deconvolution: {hdr_arr[count]['CAL_PSF']}. Cavity correction: {cavity_c}"

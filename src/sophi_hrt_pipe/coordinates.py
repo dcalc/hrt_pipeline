@@ -630,7 +630,7 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
                     phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
                                         top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
 
-                    hmi_remap = remap(phi_map, hmi_map, out_shape = (2048,2048), verbose=False)
+                    hmi_remap = remap(phi_map, hmi_map, out_shape = (2048,2048))
 
                     # necessary when the FoV is close to the HMI limb
                     temp0 = hmi_remap.data.copy(); temp0[np.isinf(temp0)] = 0; temp0[np.isnan(temp0)] = 0
@@ -701,7 +701,7 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
         # phi_submap = phi_map.submap(np.asarray([slx.start, sly.start])*u.pix,
         #                     top_right=np.asarray([slx.stop-1, sly.stop-1])*u.pix)
         with propagate_with_solar_surface():
-            hmi_remap = remap(phi_map, hmi_map, out_shape = (2048,2048), verbose=False)
+            hmi_remap = remap(phi_map, hmi_map, out_shape = (2048,2048))
         
         ht['DATE-BEG'] = h_phi['DATE-BEG']
         ht['DATE-OBS'] = h_phi['DATE-OBS']
