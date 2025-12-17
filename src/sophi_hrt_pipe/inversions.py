@@ -530,17 +530,18 @@ def generate_l2(data_f, hdr_arr, wve_axis_arr, cpos_arr, data, mask, imgdirx_fli
                 printc(f'  ---- >>>>> Re-running the inversion pixel by pixel after median filter of size {median} on the results .... ',color=bcolors.OKGREEN)
                 from scipy.ndimage import median_filter
                 input_model = np.zeros_like(rte_invs)
-                clips = [(None,None),
-                         (None,None),
+                clips = [None,
+                         None,
                          (20,3500), # B
                          (1,179), # inclination
-                         (None,None), # azimuth
+                         (rte_invs[4].min(),rte_invs[4].max()), # azimuth
                          (1,2000), # eta0
                          (0,0.15), # dop width
                          (0,9), # damping
                          (-10,10), # vlos
                          (0.01,1), # S0
                          (0.01,1.4), # S1
+                         None
                          ]
                 for i in range(2,input_model.shape[0]-1):
                     input_model[i] = np.clip(median_filter(rte_invs[i],median),*clips[i]) # median has been tested as 20
