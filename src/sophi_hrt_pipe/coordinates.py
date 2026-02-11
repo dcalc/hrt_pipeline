@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import datetime
 # import time
 # from scipy.ndimage import binary_dilation, binary_erosion, generate_binary_structure
+import subprocess
 
 # from scipy.ndimage import map_coordinates
 from astropy import units as u
@@ -354,7 +355,31 @@ def subregion_selection(ht,start_row,start_col,original_shape,dsmax = 512,edge =
     
     return sly, slx
 
-def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi_path=None):
+def readDRMS(drms_output):
+    raw =drms_output.split('\n')
+    keys = raw[0].split('\t')
+    formatted = [] 
+    drms_param = []
+    nRecs = 0
+    for line in raw[1:]:  
+        formatted = line.split('\t')# [CALVER64, T_REC, QUALITY, FDRADIAL, CARSTRCH, DIFROT_A, DIFROT_B, DIFROT_C, CRVAL1, CRLN_OBS, CAR_ROT, MAPLGMAX, MAPLGMIN, I_DREC]
+        dict_tmp = {}
+        for i, key in enumerate(keys):
+            if formatted[i].strip() == "InvalidKeyname":
+                dict_tmp[key] = 0
+            else:
+                try:
+                    dict_tmp[key]= float(formatted[i])
+                    if np.isnan(dict_tmp[key]):
+                        dict_tmp[key] = 'nan'
+                except:
+                    dict_tmp[key]= formatted[i]
+    
+        drms_param.append(dict_tmp)
+        nRecs += 1
+    return drms_param
+
+def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi_path=None, local_drms = False):
     """
     Script to download the HMI m_45 or ic_45 cosest in time to the provided SO/PHI observation.
     TAI convention and light travel time are taken into consideration.
@@ -371,11 +396,16 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
         if True, plot of the HMI map will be shown (DEFAULT: False)
     path: bool
         if True, the path of the cache directory and of the HMI dataset will return as output (DEFAULT: False)
+    hmi_path: str, None
+        if a string, looks into the directory path for the closest hmi file
+    local_drms: bool
+        if True, query on local DRMS. You need to load some modules: module load GCC/12.2.0 GSL/2.7 intel/2023.03 NetDRMS/2024.02.1-1
     """
-    
+
     import glob, drms
     import sunpy, sunpy.map
     from astropy.constants import c
+    import pandas as pd
     
     if type(t_obs) == str:
         t_obs = datetime.datetime.fromisoformat(t_obs)
@@ -409,23 +439,47 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
         
         dltt = datetime.timedelta(seconds=ht['EAR_TDEL']) # difference in light travel time S/C-Earth
 
-        kwlist = ['T_REC','T_OBS','DATE-OBS','CADENCE','DSUN_OBS']
+        kwlist = ["T_REC","T_OBS","DATE-OBS","CADENCE","DSUN_OBS"]
         
-        client = drms.Client(email=jsoc_email) 
+        if not local_drms: 
+            client = drms.Client(email=jsoc_email) 
 
         lt = np.nan
         n = 0
         while np.isnan(lt):
             n += 2
+            hmi_type = ("ic", "Continuum")
             if ht['BTYPE'] == 'BLOS':
-                keys = client.query('hmi.m_'+cad+'s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
-                                (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=n)
+                hmi_type = ("m","Magnetogram")
             elif ht['BTYPE'] == 'VLOS':
-                keys = client.query('hmi.v_'+cad+'s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
-                                (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=n)
+                hmi_type = ("v"  ,"Dopplergram")
+            
+            
+            if local_drms:
+                show_info = 'show_info %s["%s"] key="%s" -iPA' 
+                # show_info = 'show_info %s["%s"] key="%s" -iPA' 
+                input_ds = "hmi.m_"+cad+"s"
+                inRecs = (t_obs+dtai-dcad+dltt).strftime("%Y.%m.%d_%H:%M:%S")+"-"+(t_obs+dtai+dcad+dltt).strftime("%Y.%m.%d_%H:%M:%S")
+                kk = ""
+                for k in kwlist:
+                    kk += k+","
+                kk = kk[:-1]
+                kk = "DATE,DATE-OBS,TELESCOP,INSTRUME,WAVELNTH,CAMERA,BUNIT,CONTENT,QUALITY,HISTORY,CTYPE1,CTYPE2,CRPIX1,CRPIX2,CRVAL1,CRVAL2,CDELT1,CDELT2,CUNIT1,CUNIT2,CROTA2,CRDER1,CRDER2,CSYSER1,CSYSER2,WCSNAME,DSUN_OBS,DSUN_REF,RSUN_REF,CRLN_OBS,CRLT_OBS,CAR_ROT,OBS_VR,OBS_VW,OBS_VN,RSUN_OBS,T_OBS,T_REC,CADENCE"
+                kwlist = kk.split(",")
+                si_out = subprocess.check_output(show_info%(input_ds,inRecs,kk) , shell=True)[:-1].decode("utf-8")
+                drms_param = readDRMS(si_out)
+                keys = {}
+                for k in kwlist:
+                    keys[k] = [drms_param[i][k] for i in range(len(drms_param))]
+                keys = pd.DataFrame(keys)
+                numeric = keys.apply(pd.to_numeric, errors='coerce')
+                keys = numeric.where(~numeric.isna(), keys)
+
+                # return drms_param, show_info%(input_ds,inRecs,kk), keys
             else:
-                keys = client.query('hmi.ic_'+cad+'s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
+                keys = client.query('hmi.'+hmi_type[0]+'_'+cad+'s['+(t_obs+dtai-dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+'-'+
                                 (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=n)
+            
             keys = keys[keys['T_OBS'] != 'MISSING']
             if np.size(keys['T_OBS']) > 0:
                 lt = (np.nanmean(keys['DSUN_OBS'])*u.m - ht['DSUN_OBS']*u.m)/c
@@ -435,16 +489,14 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
             
         dltt = datetime.timedelta(seconds=lt.value) # difference in light travel time S/C-SDO
 
-
-        T_OBS = [(ind,np.abs((datetime.datetime.strptime(t,'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds())) for ind, t in zip(keys.index,keys['T_OBS'])]
+    
+        T_OBS = [(ind,np.abs((datetime.datetime.strptime(t,'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds())) for ind, t in zip(keys.index,keys['T_REC'])] # it was T_OBS until 2026.02.10
         ind = T_OBS[np.argmin([t[1] for t in T_OBS])][0]
 
-        if ht['BTYPE'] == 'BLOS':
-            name_h = 'hmi.m_'+cad+'s['+keys['T_REC'][ind]+']{Magnetogram}'
-        elif ht['BTYPE'] == 'VLOS':
-            name_h = 'hmi.v_'+cad+'s['+keys['T_REC'][ind]+']{Dopplergram}'
+        if local_drms:
+            name_h = drms_param[ind]
         else:
-            name_h = 'hmi.ic_'+cad+'s['+keys['T_REC'][ind]+']{Continuum}'
+            name_h = 'hmi.'+hmi_type[0]+'_'+cad+'s['+keys['T_REC'][ind]+']{'+hmi_type[1]+'}'
 
         if np.abs((datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds()) > np.ceil(int(cad)/2):
             print('WARNING: Closer file exists but has not been found.')
@@ -453,12 +505,20 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
             print('DATE-AVG:',t_obs)
             print('')
         else:
-            print('HMI T_OBS (corrected for TAI and Light travel time):',datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
+            print('HMI T_OBS (corrected for TAI and Light travel time):',datetime.datetime.strptime(keys['T_REC'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
             print('PHI DATE-AVG:',t_obs)
-        s45 = client.export(name_h,protocol='fits')
-        hmi_map = sunpy.map.Map(s45.urls.url[0],cache=False)
-        cache_dir = sunpy.data.CACHE_DIR+'/'
-        hmi_name = cache_dir + s45.urls.url[0].split("/")[-1]
+
+        if local_drms:
+            nameh = name_h['magnetogram']
+            del name_h['magnetogram']
+            hmi_map = sunpy.map.Map(fits.getdata(nameh),fits.Header(name_h))
+            cache_dir = 'None'
+            hmi_name = 'None'
+        else:
+            s45 = client.export(name_h,protocol='fits')
+            hmi_map = sunpy.map.Map(s45.urls.url[0],cache=False)
+            cache_dir = sunpy.data.CACHE_DIR+'/'
+            hmi_name = cache_dir + s45.urls.url[0].split("/")[-1]
 
     if verbose:
         hmi_map.peek()
@@ -467,8 +527,7 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
     else:
         return hmi_map
 
-
-def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undistortion = False, allDID=False,verbose=False, deriv = True, values_only = False, subregion = None, crota_manual_correction = 0.15, hmi_file = None):
+def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undistortion = False, allDID=False,verbose=False, deriv = True, values_only = False, subregion = None, crota_manual_correction = 0.15, hmi_file = None, local_drms = False):
     """This function saves new version of the fits file with updated WCS.
     It works by correlating HRT data on remapped HMI data. 
     This function exports the nearest HMI data from JSOC. [Not downloaded to out_dir]
@@ -504,6 +563,11 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
         if None, automatic subregion. Accepted values are only tuples of slices (sly,slx)
     crota_manual_correction: float
         manual change to HRT CROTA value (deg). The value is added to the original one (DEFAULT: 0.15)
+    hmi_file:
+
+    local_drms: bool
+        if True, query on local DRMS. You need to load some modules: module load GCC/12.2.0 GSL/2.7 intel/2023.03 NetDRMS/2024.02.1-1
+
     Returns
     -------
     ht: astropy.io.fits.header.Header
@@ -580,7 +644,9 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
         t_obs = datetime.datetime.fromisoformat(ht['DATE-AVG'])
     
     try:
-        if hmi_file is None:
+        if local_drms:
+            hmi_map, cache_dir, hmi_name = downloadClosestHMI(ht,t_obs,jsoc_email,verbose,True,local_drms=local_drms)
+        elif hmi_file is None:
             hmi_map, cache_dir, hmi_name = downloadClosestHMI(ht,t_obs,jsoc_email,verbose,True)
         else:
             if os.path.isfile(hmi_file):
@@ -746,7 +812,7 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
         ax2.coords[0].grid_lines_kwargs['edgecolor'] = 'k'
         ax2.coords[1].grid_lines_kwargs['edgecolor'] = 'k'
     
-    if os.path.isfile(hmi_name) and hmi_file is None:
+    if os.path.isfile(hmi_name) and hmi_file is None and not local_drms:
         os.remove(hmi_name)
         import sqlite3
         # creating file path
@@ -768,7 +834,7 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
             if allDID:
                 did = h_phi['PHIDATID']
                 name = file_name.split('/')[-1]
-                new_name = name.replace("_phi-",".WCS_phi-")
+                new_name = name.replace(h_phi['VERSION'],h_phi['VERSION']+"WCS")
     
                 directory = file_name[:-len(name)]
                 file_n = os.listdir(directory)
@@ -779,7 +845,7 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
                 for n in l2_n:
                     f = [i for i in did_n if n in i][0]
                     name = f.split('/')[-1]
-                    new_name = name.replace("_phi-",".WCS_phi-")
+                    new_name = name.replace(h_phi['VERSION'],h_phi['VERSION']+"WCS")
                     with fits.open(f) as h:
                         h[0].header['CROTA'] = ht['CROTA']
                         h[0].header['CRPIX1'] = ht['CRPIX1'] - start_col
@@ -793,6 +859,8 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
                         h[0].header['HISTORY'] = 'WCS corrected via HRT - HMI cross correlation'
                         h.writeto(dir_out+new_name, overwrite=True)        
             else:
+                name = file_name.split('/')[-1]
+                new_name = name.replace(h_phi['VERSION'],h_phi['VERSION']+"WCS")
                 with fits.open(file_name) as h:
                     h[0].header['CROTA'] = ht['CROTA']
                     h[0].header['CRPIX1'] = ht['CRPIX1'] - start_col
