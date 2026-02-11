@@ -219,7 +219,7 @@ def plot_fdt_hrt(fdt_map, hrt_map):
 
 def run_HMI_correction(data, header, verbose = False, **kwargs):
 
-    parameters = dict(filename = None, print_values = False, hmi_path = None, crota_manual_correction = 0.15)
+    parameters = dict(filename = None, print_values = False, hmi_path = None, crota_manual_correction = 0.15, local_drms = False)
     parameters = {**parameters, **kwargs}
 
     if parameters['filename'] is not None:
@@ -252,9 +252,10 @@ def run_HMI_correction(data, header, verbose = False, **kwargs):
         try:
             if parameters['filename'] is not None:
                 ht = fits.getheader(f)
-                hmi_map, cache_dir, hmi_name = downloadClosestHMI(ht,ht['DATE-AVG'],"calchetti@mps.mpg.de",path=True,hmi_path=parameters['hmi_path'])
+                hmi_map, cache_dir, hmi_name = downloadClosestHMI(ht,ht['DATE-AVG'],"calchetti@mps.mpg.de",path=True,hmi_path=parameters['hmi_path'], local_drms=parameters['local_drms'])
+                print('ciao')
             else:
-                hmi_map, cache_dir, hmi_name = downloadClosestHMI(header,header['DATE-AVG'],"calchetti@mps.mpg.de",path=True,hmi_path=parameters['hmi_path'])
+                hmi_map, cache_dir, hmi_name = downloadClosestHMI(header,header['DATE-AVG'],"calchetti@mps.mpg.de",path=True,hmi_path=parameters['hmi_path'], local_drms=parameters['local_drms'])
         except FileNotFoundError as e:
             printc('No HMI file could be found for this HRT file, return None', color=bcolors.FAIL)
             for key in newWCS.keys():
@@ -299,7 +300,7 @@ def run_HMI_correction(data, header, verbose = False, **kwargs):
         print(cols)
 
     # empty the cache
-    if os.path.isfile(hmi_name) and parameters['hmi_path'] is None:
+    if os.path.isfile(hmi_name) and parameters['hmi_path'] is None and not parameters['local_drms']:
         os.remove(hmi_name)
         import sqlite3
         # creating file path
