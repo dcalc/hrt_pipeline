@@ -893,7 +893,13 @@ def phihrt_pipe(input_json_file):
             Ic_mask[...,scan] = Ic_temp
             AR_mask[...,scan] = AR_temp
             hdr_arr[scan]['CAL_NORM'] = round(I_c[scan],4)
-        
+
+            # add keyword to header specifying the used sub-region sly and slx (as for CRPIX, the BEG is +1, first pixel is always 1)
+            hdr_arr[scan].set('CAL_SRB1',slx.start+1, 'Sub Region Begin along Axis 1', after='CAL_REAL')
+            hdr_arr[scan].set('CAL_SRE1',slx.stop, 'Sub Region End along Axis 1', after='CAL_SRB1')
+            hdr_arr[scan].set('CAL_SRB2',sly.start+1, 'Sub Region Begin along Axis 2', after='CAL_SRE1')
+            hdr_arr[scan].set('CAL_SRE2',sly.stop, 'Sub Region End along Axis 2', after='CAL_SRB2')
+
         limb_mask = np.array(limb_mask, dtype=bool)
         limb_percent_mask = np.array(limb_percent_mask, dtype=bool)
         

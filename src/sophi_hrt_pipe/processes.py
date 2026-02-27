@@ -6,7 +6,7 @@ from astropy.io import fits
 import scipy.optimize as spo
 
 from .utils import get_data, fits_get_sampling, filling_data, compare_IMGDIRX, compare_cpos, printc, bcolors, fits_get_sampling, filling_data, compare_IMGDIRX, compare_cpos, load_fits, image_derivative, fft_shift, SPG_shifts_FFT, stokes_reshape, find_nearest
-from .coordinates import solarRotation, SCVelocityResidual, meridionalFlow, SCGravitationalRedshift, convectiveBlueshift, mu_angle, center_coord
+from .coordinates import solarRotation, SCVelocityResidual, meridionalFlow, SCGravitationalRedshift, convectiveBlueshift, mu_angle, center_coord, muSO_map, CLV
 import os
 import time
 import cv2
@@ -1990,6 +1990,33 @@ def elliptical_mask(shape,p):
 
     return mask
 
+def elliptical_mu_map(shape,p):
+    """
+    Ellipse mask
+
+    Parameters
+    ----------
+    shape : tuple
+            shape of the mask
+    p : list
+        [a,b,h,k,A] - ellipse axes (x,y), centers (x,y) and angle
+
+    Returns
+    -------
+    mumap: numpy.ndarray
+          mu value map using the values from the ellipse
+    """    
+    a,b,h,k,A = p
+    x,y = np.meshgrid(np.arange(shape[1]),np.arange(shape[0]))
+    # ellipse defined as the normalized distance from the center
+    ell = ((x-h)*np.cos(A)+(y-k)*np.sin(A))**2/a**2+((x-h)*np.sin(A)-(y-k)*np.cos(A))**2/b**2
+    ell = np.where(ell>1,0,ell)
+    # mu map
+    mumap = np.sqrt(1-ell**2)
+
+    return mumap
+
+
 def fit_plane(data, mask=None, order=1):
 
     """
@@ -2076,7 +2103,7 @@ def subROIconstrast(img, img_mask, windowSize, windowSeparation):
             if img_mask[roi].sum() == 4*windowSize**2:
                 temp = img[roi].copy()
                 # detrend
-                temp /= fit_plane(temp.copy(),order=5)[0]
+                # temp /= fit_plane(temp.copy(),order=5)[0]
                 contrast[i,j] = np.nanstd(temp)/np.nanmean(temp)
             
     return contrast
@@ -2198,7 +2225,10 @@ def limb_ellipse(img, hdr, field_stop, AR_mask, verbose=True, percent=False, fit
         #     windowSize = 384
         # else:
         windowSize = int(256//hdr['NBIN1'])
-        contrast256 = subROIconstrast(img.copy(), (field_stop*mask98)>0, windowSize, windowSize)
+        # clv = CLV(muSO_map(hdr,img.shape))
+        clv = CLV(elliptical_mu_map(img.shape,p.x))
+        contrast256 = subROIconstrast(img.copy()/clv, (field_stop*mask98)>0, windowSize, windowSize)
+        # contrast256 = subROIconstrast(img.copy(), (field_stop*mask98)>0, windowSize, windowSize)
         i,j = np.unravel_index(np.argmax(contrast256),contrast256.shape)
         sly,slx = slice(i-windowSize,i+windowSize), slice(j-windowSize,j+windowSize)
         print('\nHigh contrast slices: ',sly,slx,'\n')
