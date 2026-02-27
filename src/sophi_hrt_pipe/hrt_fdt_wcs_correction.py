@@ -13,6 +13,7 @@ from sunpy.coordinates import Helioprojective
 from sunpy.coordinates import propagate_with_solar_surface
 import warnings, sunpy
 from astropy import units as u
+from sunpy.coordinates import SphericalScreen
 
 warnings.filterwarnings("ignore", category=sunpy.util.SunpyMetadataWarning)
 
@@ -296,7 +297,7 @@ def correction(hrt_map, fdt_map, deriv=False,verbose=False,max_iterations = 10):
         hrt_map = sunpy.map.Map((und_hrt,ht))
         
         with propagate_with_solar_surface():
-            with Helioprojective.assume_spherical_screen(fdt_map.observer_coordinate,True):
+            with SphericalScreen(fdt_map.observer_coordinate, only_off_disk=True):
                 
                 bl = hrt_map.bottom_left_coord
                 tr = hrt_map.top_right_coord

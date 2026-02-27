@@ -527,7 +527,7 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
     else:
         return hmi_map
 
-def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undistortion = False, allDID=False,verbose=False, deriv = True, values_only = False, subregion = None, crota_manual_correction = 0.15, hmi_file = None, local_drms = False):
+def WCS_correction(file_name,jsoc_email,data=None,header=None,dir_out='./',remapping = 'remap',undistortion = False, allDID=False,verbose=False, deriv = True, values_only = False, subregion = None, crota_manual_correction = 0.15, hmi_file = None, local_drms = False):
     """This function saves new version of the fits file with updated WCS.
     It works by correlating HRT data on remapped HMI data. 
     This function exports the nearest HMI data from JSOC. [Not downloaded to out_dir]
@@ -545,6 +545,10 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
         path to the fits file
     jsoc_email: str
         email address to be used for JSOC connection
+    data: np.array, None
+        data array. if None, data is imported from file_name
+    header: fits.Header, None
+        data header. if None, header is imported from file_name
     dir_out: str
         path to the output directory, DEFAULT: './', if None no file will be saved
     remapping: str
@@ -558,7 +562,7 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
     deriv: bool
         if True, correlation is computed using the derivative of the image (DEFAULT: True)
     values_only: bool
-        if True, new fits will not be saved (DEFAULT: False).
+        if True, new fits will not be saved (DEFAULT: False). True if data and header are provided.
     subregion: tuple, None
         if None, automatic subregion. Accepted values are only tuples of slices (sly,slx)
     crota_manual_correction: float
@@ -588,11 +592,19 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
     # print('It has been optimized on raw, continuum and blos data')
     # print('This script is based on sunpy routines and examples')
     
-    hdr_phi = fits.open(file_name)
-    phi = hdr_phi[0].data; h_phi = hdr_phi[0].header
+    if data is None or header is None:
+        hdr_phi = fits.open(file_name)
+        phi = hdr_phi[0].data; h_phi = hdr_phi[0].header
+        _,_,_,cpos = fits_get_sampling(file_name)
+    else:
+        print('Data and header provided manually. No file will be saved.')
+        phi = data.copy(); h_phi = header.copy()
+        cpos = header['CONTPOS']-1
+        values_only = True
+
     start_row = int(h_phi['PXBEG2']-1)
     start_col = int(h_phi['PXBEG1']-1)
-    _,_,_,cpos = fits_get_sampling(file_name)
+    
     
     h_phi = rotate_header(h_phi.copy(),-crota_manual_correction, center=center_coord(h_phi))
 
@@ -628,20 +640,22 @@ def WCS_correction(file_name,jsoc_email,dir_out='./',remapping = 'remap',undisto
         phi_map.peek()
     
     ht = phi_map.fits_header
-    t0 = hdr_phi[10].data['EXP_START_TIME']
-    if t0.size > 24:
-        t0 = t0[int(round(t0.size//24/2,0))::t0.size//24]
-    #             t0 = np.asarray([DT.datetime.fromisoformat(t0[i]) for i in range(len(t0))])
-    t0 = [t0[i] for i in range(len(t0))]
-    if cpos == 5:
-        t0 = t0[20]
-    else:
-        t0 = t0[0]
-        
-    t_obs = datetime.datetime.fromisoformat(t0)
-    if ht['BTYPE'] == 'BLOS':
+    
+    if ht['BTYPE'] in ['BLOS','VLOS']:
         t0 = ht['DATE-AVG']
         t_obs = datetime.datetime.fromisoformat(ht['DATE-AVG'])
+    else:
+        t0 = hdr_phi[10].data['EXP_START_TIME']
+        if t0.size > 24:
+            t0 = t0[int(round(t0.size//24/2,0))::t0.size//24]
+        #             t0 = np.asarray([DT.datetime.fromisoformat(t0[i]) for i in range(len(t0))])
+        t0 = [t0[i] for i in range(len(t0))]
+        if cpos == 5:
+            t0 = t0[20]
+        else:
+            t0 = t0[0]
+            
+        t_obs = datetime.datetime.fromisoformat(t0)
     
     try:
         if local_drms:

@@ -253,7 +253,6 @@ def run_HMI_correction(data, header, verbose = False, **kwargs):
             if parameters['filename'] is not None:
                 ht = fits.getheader(f)
                 hmi_map, cache_dir, hmi_name = downloadClosestHMI(ht,ht['DATE-AVG'],"calchetti@mps.mpg.de",path=True,hmi_path=parameters['hmi_path'], local_drms=parameters['local_drms'])
-                print('ciao')
             else:
                 hmi_map, cache_dir, hmi_name = downloadClosestHMI(header,header['DATE-AVG'],"calchetti@mps.mpg.de",path=True,hmi_path=parameters['hmi_path'], local_drms=parameters['local_drms'])
         except FileNotFoundError as e:

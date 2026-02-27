@@ -36,7 +36,7 @@ def setup_header(hdr_arr):
     0,0,0,0,0,0,
     0,0,0,0,
     'None',' ','NA','NA','NA',' ','False',
-    'None','None',' ',' ',4294967295, 'False', hdr_arr[0]['VERS_SW'][1:4]]
+    'None','None',' ',' ',4294967295, 'False', hdr_arr[0]['VERS_SW'].split(' ')[0]]
 
     c = ['Onboard calibrated for gain table','Unsharp masking correction','Number of flat field frames used','Sigma for unsharp masking [px]','Wavelengths correction for FG temperature',
     'Prefilter correction (DID/file)','Ghost correction (name + version of module)',
