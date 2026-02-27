@@ -13,9 +13,9 @@ from .utils import printc, bcolors, get_data, fits_get_sampling, check_size, che
 from .processes import setup_header, apply_dark_correction, load_and_process_flat, load_cavity, prefilter_correction, prefilter_correction_WLS, normalise_flat, unsharp_masking, flat_correction, apply_field_stop, hot_pixel_mask, load_ghost_field_stop, polarimetric_registration, wavelength_registration, demod_hrt, crosstalk_2D_ItoQUV, crosstalk_auto_VtoQU, CT_VtoQU, write_out_intermediate, data_hdr_kw, limb_ellipse, average_registration
 
 from .inversions import generate_l2, create_output_filenames, CE_output
-from .coordinates import muSO_map
+from .coordinates import muSO_map, ccd2HGS
 from .hrt_fdt_wcs_correction import run_FDT_correction, get_descriptor, correct_wcs_with_limb
-from .hrt_fdt_wcs_correction import VERSION as wcs_version
+from .hrt_hmi_wcs_correction import run_HMI_correction
 
 from .PSF import fran_restore
 
@@ -1226,10 +1226,39 @@ def phihrt_pipe(input_json_file):
             if not good:
                 out_ce = CE_output(data[...,scan].copy(), wave_axis_arr[scan], cpos_arr[scan])
                 im = out_ce[2]*np.cos(out_ce[3]*np.pi/180); del out_ce
+
                 if wcs_update.lower() == 'fdt':
                     printc('-->>>>>>> Running FDT WCS correction on the BLOS file',bcolors.OKGREEN)
                     new_wcs = run_FDT_correction(im*limb_mask[...,scan], htemp, False, print_values=True)
+                    from .hrt_fdt_wcs_correction import VERSION as wcs_version
                 
+                elif wcs_update.lower() == 'hmi':
+                    hmi_lim= (-89,89)
+                    centerFoV = ccd2HGS(htemp, np.array([[htemp['NAXIS1']//2, htemp['NAXIS2']//2],
+                                            [htemp['NAXIS1']//2, 0],
+                                            [htemp['NAXIS1']//2, htemp['NAXIS2']-1],
+                                            [0, htemp['NAXIS2']//2],
+                                            [htemp['NAXIS1']-1, htemp['NAXIS2']//2]]))
+                    point = np.nanmean(centerFoV[2]) # longitude, latitude is not checked
+                    
+                    if point > hmi_lim[0] and point < hmi_lim[1]:
+                        printc('-->>>>>>> Running HMI WCS correction on the BLOS file',bcolors.OKGREEN)
+                        try:
+                            new_wcs = run_HMI_correction(im*limb_mask[...,scan], htemp, verbose = False, filename = None, print_values = False, hmi_path = None, crota_manual_correction = 0.15, local_drms = True)
+                            from .hrt_hmi_wcs_correction import VERSION as wcs_version
+                        except Exception as e:
+                            printc(f"Error while correcting with HMI. The code will continue.\nThis was the error: {e}",bcolors.FAIL)
+                            new_wcs = {'CROTA':[None]}
+                    else:
+                        printc('-->>>>>>> Running FDT WCS correction on the BLOS file because the FoV is not in HMI view',bcolors.WARNING)
+                        wcs_update = 'fdt'
+                        from .hrt_fdt_wcs_correction import VERSION as wcs_version
+                        try:
+                            new_wcs = run_FDT_correction(im*limb_mask[...,scan], htemp, False, print_values=True)
+                        except Exception as e:
+                            printc(f"Error while correcting with FDT. The code will continue.\nThis was the error: {e}",bcolors.FAIL)
+                            new_wcs = {'CROTA':[None]}
+
                 for k,v in new_wcs.items():
                     if v[0] is not None:
                         hdr_arr[scan][k] = v[0]

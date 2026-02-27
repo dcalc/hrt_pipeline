@@ -17,7 +17,7 @@ from sunpy.coordinates import SphericalScreen
 
 warnings.filterwarnings("ignore", category=sunpy.util.SunpyMetadataWarning)
 
-VERSION = '0.0.1'
+VERSION = '1.0.0'
 
 def get_descriptor(filename, telescope='hrt'):
     descriptor = filename.split('phi-{0}-'.format(telescope))[1].split('_')[0]
