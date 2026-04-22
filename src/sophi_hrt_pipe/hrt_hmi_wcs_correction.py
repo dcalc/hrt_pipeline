@@ -13,7 +13,13 @@ from sunpy.coordinates import Helioprojective
 from sunpy.coordinates import propagate_with_solar_surface
 import warnings, sunpy
 from astropy import units as u
-from sunpy.coordinates import SphericalScreen
+from packaging import version
+
+if version.parse(sunpy.__version__) >= version.parse("5.0"):
+    # SunPy ≥ 5.0  →  the new class exists
+    from sunpy.coordinates import SphericalScreen
+else:                                   # SunPy < 5.0  →  fall back
+    SphericalScreen = Helioprojective.assume_spherical_screen
 
 warnings.filterwarnings("ignore", category=sunpy.util.SunpyMetadataWarning)
 
