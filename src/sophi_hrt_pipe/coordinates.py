@@ -402,7 +402,7 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
         if True, query on local DRMS. You need to load some modules: module load GCC/12.2.0 GSL/2.7 intel/2023.03 NetDRMS/2024.02.1-1
     """
 
-    import glob, drms
+    import glob
     import sunpy, sunpy.map
     from astropy.constants import c
     import pandas as pd
@@ -442,6 +442,7 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
         kwlist = ["T_REC","T_OBS","DATE-OBS","CADENCE","DSUN_OBS"]
         
         if not local_drms: 
+            import drms
             client = drms.Client(email=jsoc_email) 
 
         lt = np.nan

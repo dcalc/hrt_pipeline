@@ -1243,9 +1243,9 @@ def phihrt_pipe(input_json_file):
                     
                     if point > hmi_lim[0] and point < hmi_lim[1]:
                         printc('-->>>>>>> Running HMI WCS correction on the BLOS file',bcolors.OKGREEN)
+                        from .hrt_hmi_wcs_correction import VERSION as wcs_version
                         try:
                             new_wcs = run_HMI_correction(im*limb_mask[...,scan], htemp, verbose = False, filename = None, print_values = False, hmi_path = None, crota_manual_correction = 0.15, local_drms = True)
-                            from .hrt_hmi_wcs_correction import VERSION as wcs_version
                         except Exception as e:
                             printc(f"Error while correcting with HMI. The code will continue.\nThis was the error: {e}",bcolors.FAIL)
                             new_wcs = {'CROTA':[None]}
