@@ -127,7 +127,7 @@ def phihrt_pipe(input_json_file):
     pipeline_dir = os.path.realpath(__file__).split('src/')[0]
     repo = git.Repo(pipeline_dir)
     sha = repo.head.object.hexsha
-    version = 'V1.11.0 December 16th 2025'
+    version = 'V1.12.0 April 23rd 2026'
 
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
     printc('PHI HRT data reduction software  ',bcolors.OKGREEN)

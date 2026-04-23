@@ -3,7 +3,7 @@
 Reduction software for SO/PHI-HRT instrument on the ESA Solar Orbiter
 
 ![](https://img.shields.io/badge/License-MIT-green) 
-![](https://img.shields.io/badge/Version-V1.11.0%20December%2016th%202025-brightgreen)
+![](https://img.shields.io/badge/Version-V1.12.0%20April%2023rd%202026-brightgreen)
 ![](https://img.shields.io/badge/OS-Linux-yellow)
 ![](https://img.shields.io/github/last-commit/JonasSinjan/hrt_pipeline)
 ![](https://img.shields.io/github/contributors/JonasSinjan/hrt_pipeline)
