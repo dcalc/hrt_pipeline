@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import os
 
 from .processes import limb_side_finder
-from .utils import load_fits, fits_get_sampling, iter_noise, gaussian_fit, gaus
+from .utils import load_fits, fits_get_sampling, iter_noise, gaussian_fit, gaus, get_descriptor
 from astropy.io import fits
 import datetime
 
@@ -287,9 +287,13 @@ def plot_l2_pdf(path,did,version=None,save_output=True,plot_noise=True,plot_stok
     ax.set_title('Magn. field azimuth')
 
     # Figure title
-    timestp = h['FILENAME'].split('_')[-3]
-    fig.suptitle(save_file, fontsize=11)
-    
+    # timestp = h['FILENAME'].split('_')[-3]
+    # fig.suptitle(save_file, fontsize=11)
+    desc = get_descriptor(h['FILENAME'],'hrt')
+    name = h['FILENAME'].replace(f"-{desc}","")
+    figtitle = f"{name}, {h['DSUN_AU']:.2f} au, {h['OBS_VR']/1e3:.3f} km/s, {h['HGLN_OBS']:.2f}\u00b0, {h['HGLT_OBS']:.2f}\u00b0"
+    fig.suptitle(figtitle)
+
     if save_output:
         fig.savefig(p, format='pdf')
         plt.close(fig)
@@ -457,11 +461,11 @@ def plot_l2_pdf(path,did,version=None,save_output=True,plot_noise=True,plot_stok
         grayscales = [(.3,1.2)] + [(-3e-3,3e-3)]*3 # [1] + [0.01] * 3  # I, Q, U, V
         row_labels = ['I', 'Q', 'U', 'V']
         column_labels = ['{:.3f} nm'.format(wave) for wave in wavelengths]
-        title = os.path.basename(datfile) 
+        # title = os.path.basename(datfile) 
 
         fig = show_image_array(
             stk, h, grayscales, row_labels=row_labels,
-            column_labels=column_labels, fig_title=title)
+            column_labels=column_labels, fig_title=figtitle)
 
         if save_output:
             fig.savefig(p, format='pdf')

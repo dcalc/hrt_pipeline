@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot as plt
 from astropy.io import fits
-from .utils import find_nearest, printc, bcolors
+from .utils import find_nearest, printc, bcolors, get_descriptor
 from .coordinates import rotate_header, translate_header, center_coord, circular_mask, remap, fft_shift, image_register, Inv2, und, downloadClosestHMI
 from .processes import limb_side_finder, elliptical_mask
 # import argparse
@@ -24,10 +24,6 @@ else:                                   # SunPy < 5.0  →  fall back
 warnings.filterwarnings("ignore", category=sunpy.util.SunpyMetadataWarning)
 
 VERSION = '1.0.0'
-
-def get_descriptor(filename, telescope='hrt'):
-    descriptor = filename.split('phi-{0}-'.format(telescope))[1].split('_')[0]
-    return descriptor
 
 def prepare_data(hrt_file, hmi_map, crota_manual_correction=0.15, undistortion=False, verbose=False):
     if isinstance(hrt_file, str):

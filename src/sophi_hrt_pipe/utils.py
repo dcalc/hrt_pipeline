@@ -1149,6 +1149,9 @@ def und(hrt, order=1, flip = True):
     else:
         return hrt_und
 
+def get_descriptor(filename, telescope='hrt'):
+    descriptor = filename.split('phi-{0}-'.format(telescope))[1].split('_')[0]
+    return descriptor
 
 ###############################################
 def load_l2_stk(directory,did,version=None):

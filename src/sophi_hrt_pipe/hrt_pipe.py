@@ -8,13 +8,13 @@ import git
 from numpy.core.numeric import True_
 from scipy.ndimage import binary_dilation, binary_erosion, generate_binary_structure
 
-from .utils import printc, bcolors, get_data, fits_get_sampling, check_size, check_binning, check_cpos, check_pmp_temp, stokes_reshape, compare_IMGDIRX, compare_cpos, load_fits,  ARmasking, check_IMGDIRX, check_filenames
+from .utils import printc, bcolors, get_data, fits_get_sampling, check_size, check_binning, check_cpos, check_pmp_temp, stokes_reshape, compare_IMGDIRX, compare_cpos, load_fits,  ARmasking, check_IMGDIRX, check_filenames, get_descriptor
 
 from .processes import setup_header, apply_dark_correction, load_and_process_flat, load_cavity, prefilter_correction, prefilter_correction_WLS, normalise_flat, unsharp_masking, flat_correction, apply_field_stop, hot_pixel_mask, load_ghost_field_stop, polarimetric_registration, wavelength_registration, demod_hrt, crosstalk_2D_ItoQUV, crosstalk_auto_VtoQU, CT_VtoQU, write_out_intermediate, data_hdr_kw, limb_ellipse, average_registration
 
 from .inversions import generate_l2, create_output_filenames, CE_output
 from .coordinates import muSO_map, ccd2HGS
-from .hrt_fdt_wcs_correction import run_FDT_correction, get_descriptor, correct_wcs_with_limb
+from .hrt_fdt_wcs_correction import run_FDT_correction, correct_wcs_with_limb
 from .hrt_hmi_wcs_correction import run_HMI_correction
 
 from .PSF import fran_restore
