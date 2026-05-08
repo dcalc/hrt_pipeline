@@ -291,7 +291,7 @@ def plot_l2_pdf(path,did,version=None,save_output=True,plot_noise=True,plot_stok
     # fig.suptitle(save_file, fontsize=11)
     desc = get_descriptor(h['FILENAME'],'hrt')
     name = h['FILENAME'].replace(f"-{desc}","")
-    figtitle = f"{name}, {h['DSUN_AU']:.2f} au, {h['OBS_VR']/1e3:.3f} km/s, {h['HGLN_OBS']:.2f}\u00b0, {h['HGLT_OBS']:.2f}\u00b0"
+    figtitle = f"{name}, {h['SOOPNAME'].split('_')[-1]}, {h['DSUN_AU']:.2f} au, {h['OBS_VR']/1e3:.3f} km/s, {h['HGLN_OBS']:.2f}\u00b0, {h['HGLT_OBS']:.2f}\u00b0"
     fig.suptitle(figtitle)
 
     if save_output:

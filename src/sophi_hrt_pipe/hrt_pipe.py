@@ -1242,15 +1242,15 @@ def phihrt_pipe(input_json_file):
                     point = np.nanmean(centerFoV[2]) # longitude, latitude is not checked
                     
                     if point > hmi_lim[0] and point < hmi_lim[1]:
-                        printc('-->>>>>>> Running HMI WCS correction on the BLOS file',bcolors.OKGREEN)
+                        printc('-->>>>>>> Running HMI WCS correction on the BLOS file (longitude: {:.2f} deg)'.format(point),bcolors.OKGREEN)
                         from .hrt_hmi_wcs_correction import VERSION as wcs_version
                         try:
                             new_wcs = run_HMI_correction(im*limb_mask[...,scan], htemp, verbose = False, filename = None, print_values = False, hmi_path = None, crota_manual_correction = 0.15, local_drms = True)
                         except Exception as e:
                             printc(f"Error while correcting with HMI. The code will continue.\nThis was the error: {e}",bcolors.FAIL)
                             new_wcs = {'CROTA':[None]}
-                    else:
-                        printc('-->>>>>>> Running FDT WCS correction on the BLOS file because the FoV is not in HMI view',bcolors.WARNING)
+                    if new_wcs['CROTA'][0] == None or point <= hmi_lim[0] or point >= hmi_lim[1]:
+                        printc('-->>>>>>> Running FDT WCS correction on the BLOS file because the longitude is {:.2f} deg or the correction failed'.format(point),bcolors.WARNING)
                         wcs_update = 'fdt'
                         from .hrt_fdt_wcs_correction import VERSION as wcs_version
                         try:
