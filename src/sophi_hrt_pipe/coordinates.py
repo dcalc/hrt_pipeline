@@ -447,7 +447,9 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
 
         lt = np.nan
         n = 0
-        while np.isnan(lt):
+        MAXITER = 5
+        iteration = 0
+        while np.isnan(lt) and iteration < MAXITER:
             n += 2
             hmi_type = ("ic", "Continuum")
             if ht['BTYPE'] == 'BLOS':
@@ -475,6 +477,7 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
                 keys = pd.DataFrame(keys)
                 numeric = keys.apply(pd.to_numeric, errors='coerce')
                 keys = numeric.where(~numeric.isna(), keys)
+                keys[keys.apply(lambda x: x == 'nan')] = np.nan
 
                 # return drms_param, show_info%(input_ds,inRecs,kk), keys
             else:
@@ -482,11 +485,14 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
                                 (t_obs+dtai+dcad+dltt).strftime('%Y.%m.%d_%H:%M:%S')+']',seg=None,key=kwlist,n=n)
             
             keys = keys[keys['T_OBS'] != 'MISSING']
-            if np.size(keys['T_OBS']) > 0:
+            if np.size(keys['T_OBS']) > 0 and (not keys['DSUN_OBS'].isna().all()):
                 lt = (np.nanmean(keys['DSUN_OBS'])*u.m - ht['DSUN_OBS']*u.m)/c
             else:
                 print('adding 60s margin')
                 dcad += datetime.timedelta(seconds=60)
+                iteration += 1
+                if iteration == MAXITER:
+                    raise FileNotFoundError('No HMI file found within the time range.')
             
         dltt = datetime.timedelta(seconds=lt.value) # difference in light travel time S/C-SDO
 

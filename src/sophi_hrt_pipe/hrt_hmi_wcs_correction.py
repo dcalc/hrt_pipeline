@@ -261,6 +261,7 @@ def run_HMI_correction(data, header, verbose = False, **kwargs):
             printc('No HMI file could be found for this HRT file, return None', color=bcolors.FAIL)
             for key in newWCS.keys():
                 newWCS[key].append(None)
+            hmi_name = 'None'
             continue
 
         print("")
