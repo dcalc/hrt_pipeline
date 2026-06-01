@@ -6,6 +6,6 @@ requests==2.24.0
 python-dotenv==0.14.0
 cmasher==1.6.0
 Cython==3.0.2
-photutils
+photutils>=2.2.0
 pandas
 opencv

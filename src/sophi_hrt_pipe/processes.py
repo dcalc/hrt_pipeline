@@ -1,6 +1,12 @@
 import numpy as np
-from scipy.ndimage import gaussian_filter
-from sophi_hrt_pipe.utils import *
+from scipy.ndimage import gaussian_filter, label, binary_fill_holes, binary_dilation
+from matplotlib import pyplot as plt
+import datetime
+from astropy.io import fits
+import scipy.optimize as spo
+
+from .utils import get_data, fits_get_sampling, filling_data, compare_IMGDIRX, compare_cpos, printc, bcolors, fits_get_sampling, filling_data, compare_IMGDIRX, compare_cpos, load_fits, image_derivative, fft_shift, SPG_shifts_FFT, stokes_reshape, find_nearest
+from .coordinates import solarRotation, SCVelocityResidual, meridionalFlow, SCGravitationalRedshift, convectiveBlueshift, mu_angle, center_coord, muSO_map, CLV
 import os
 import time
 import cv2
@@ -22,23 +28,23 @@ def setup_header(hdr_arr):
     'CAL_PRE','CAL_GHST','CAL_PREG','CAL_REAL',
     'CAL_CRT0','CAL_CRT1','CAL_CRT2','CAL_CRT3','CAL_CRT4','CAL_CRT5',
     'CAL_CRT6','CAL_CRT7','CAL_CRT8','CAL_CRT9',
-    'CAL_WREG','CAL_NORM','CAL_FRIN','CAL_PSF','CAL_ZER','CAL_IPOL',
-    'CAL_CAVM','CAL_SCIP','RTE_MOD','RTE_SW','RTE_ITER','VERS_CAL']
+    'CAL_WREG','CAL_NORM','CAL_FRIN','CAL_PSF','CAL_ZER','CAL_IPOL','CAL_WCS',
+    'CAL_CAVM','CAL_SCIP','RTE_MOD','RTE_SW','RTE_ITER','RTE_MU','VERS_CAL']
 
     v = [0,24,' ',' ','False',
     ' ','None ','None','NA',
     0,0,0,0,0,0,
     0,0,0,0,
-    'None',' ','NA','NA','NA',' ',
-    'None','None',' ',' ',4294967295, hdr_arr[0]['VERS_SW'][1:4]]
+    'None',' ','NA','NA','NA',' ','False',
+    'None','None',' ',' ',4294967295, 'False', hdr_arr[0]['VERS_SW'].split(' ')[0]]
 
     c = ['Onboard calibrated for gain table','Unsharp masking correction','Number of flat field frames used','Sigma for unsharp masking [px]','Wavelengths correction for FG temperature',
     'Prefilter correction (DID/file)','Ghost correction (name + version of module)',
          'Polarimetric registration','Prealigment of images before demodulation',
     'cross-talk from I to Q (slope)','cross-talk from I to Q (offset)','cross-talk from I to U (slope)','cross-talk from I to U (offset)','cross-talk from I to V (slope)','cross-talk from I to V (offset)',
     'cross-talk from V to Q (slope)','cross-talk from V to Q (offset)','cross-talk from V to U (slope)','cross-talk from V to U (offset)','Wavelength Registration',
-    'Normalization (normalization constant PROC_Ic)','Fringe correction (name + version of module)','PSF deconvolution','Zernike coefficients (rad)','Onboard calibrated for instrumental polarizatio',
-    'Cavity map used during inversion','Onboard scientific data analysis','Inversion mode','Inversion software','Number RTE inversion iterations', 'Version of calibration pack']
+    'Normalization (normalization constant PROC_Ic)','Fringe correction (name + version of module)','PSF deconvolution','Zernike coefficients (rad)','Onboard calibrated for instrumental polarization','Update of the WCS coordinates between L1 and L2',
+    'Cavity map used during inversion','Onboard scientific data analysis','Inversion mode','Inversion software','Number RTE inversion iterations', 'MU dependence in RTE inversion', 'Version of calibration pack']
 
     for h in hdr_arr:
         for i in range(len(k)):
@@ -74,7 +80,117 @@ def data_hdr_kw(hdr, data):
     return hdr
 
 
-def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, header_imgdirx_exists, imgdirx_flipped, cpos_arr,pmp_temp) -> np.ndarray:
+def binningFunction(data, binf, crop = True, apod='cosine', apc = 2, fourier='cosine', fpc = 5, shift=True):
+    """
+    Binning function to bin the data by a factor binf.
+    Parameters
+    ----------
+    data: ndarray
+        input data to be binned. Accepted shapes: (N,y,x) or (y,x)
+    binf: int
+        binning factor, must be an even number
+    crop: bool
+        if True, uses Fourier cropping. If False, it uses cv2.resize 
+    apod: str
+        apodization type for the data, options are 'cosine' or 'none', DEFAULT = 'cosine'
+    apc: int
+        percentage of the image to be apodized, DEFAULT = 2; recommended values are 1, 2, 3
+    fourier: str
+        apodization type for the Fourier transform, options are 'cosine' or 'none', DEFAULT = 'cosine'
+    fpc: int
+        percentage of the Fourier image to be apodized, DEFAULT = 5; recommended values are 3, 5, or 10
+    shift: bool
+        if True, apply a shift to the binned image, DEFAULT = True
+    
+    Returns
+    -------
+    binnedData: ndarray
+        binned data
+    fourierMask: ndarray
+        Fourier mask used for the binning
+    """
+    try:
+        import pyfftw.interfaces.numpy_fft as fft
+    except:
+        from numpy import fft
+    
+    sz = data.shape # shape of original data
+    ds = int(sz[-1]/binf/2) # half size of the binned dataset
+    cen = int(sz[-1]//2) # center of the image
+    ndim = data.ndim
+    
+    if ndim == 3:
+        binnedData = np.zeros((sz[0],ds*2,ds*2))
+    else:
+        binnedData = np.zeros((ds*2,ds*2))
+    
+    if crop:
+        if apod == 'cosine':
+        # data apodization (2 x apc%) if apod == 'cosine', otherwise no apodization
+            x = np.ones(sz[-1])
+            nx=np.size(x)
+            na=(nx*apc)//100
+
+            for i in range(na+1):
+                x[i]*=(np.cos(i*np.pi/na)*(-0.5)+0.5)
+                x[nx-1-i]*=(np.cos(i*np.pi/na)*(-0.5)+0.5)
+            apodMask = x[np.newaxis] * x[:,np.newaxis]
+        else:
+            apodMask = np.ones((sz[-2],sz[-1]))
+            
+        if fourier == 'cosine':
+        # fourier apodization (2 x fpc %) if fourier == 'cosine', otherwise no Fourier apodization
+            x = np.ones(ds*2) # size of the cropped Fourier image
+            # pc = 10
+            nx=np.size(x)
+            na=(nx*fpc)//100 # number of points on each side to be defined as cosine
+
+            for i in range(na+1):
+                x[i]*=(np.cos(i*np.pi/na)*(-0.5)+0.5) # cosine function from 0 to na
+                x[nx-1-i]*=(np.cos(i*np.pi/na)*(-0.5)+0.5) # cosine function from nx to nx - na
+            fourierMask = x[np.newaxis] * x[:,np.newaxis] # 2d mask with cosine function on all the 4 edges
+        else:
+            fourierMask = np.ones((ds*2,ds*2))
+
+        # shift of the binned image (multiplication in Fourier space). Only the square case is considered here.
+        shf = 1;
+        if shift:
+            ky = fft.ifftshift(np.linspace(-np.fix(ds),np.ceil(ds)-1,(ds*2)))/(ds*2) # spatial frquency (units: 1/px)
+            kx = fft.ifftshift(np.linspace(-np.fix(ds),np.ceil(ds)-1,(ds*2)))/(ds*2) # same as ky if the image is a square
+            delta = (sz[-1]-ds*2)/2/(sz[-1]) # shift to be applied (this is the same value for x and y if the image is a square)
+            shf = np.exp(2j*np.pi*(ky[:,np.newaxis]*delta + kx[np.newaxis]*delta)) # 2d phase map equivalent to the shift
+        
+        if ndim == 3:
+            N = sz[0]
+        else:
+            N = 1
+            
+        for n in range(N):
+            if ndim == 3:
+                im = data[n]
+            else:
+                im = data
+            fftim = fft.fftn(im.copy() * apodMask)/im.size # fourier transform of the apodized image
+            fftbinim = fft.ifftshift(fft.fftshift(fftim)[cen-ds:cen+ds,cen-ds:cen+ds] * fourierMask) # cropped and masked Fourier transfromed of the image. the fftshifts are necessary due to how Fourier mask is created (0 frequency in the center)
+            binim = fft.ifftn(fftbinim * shf * fftbinim.size).real # shifted and binned image
+            
+            if ndim == 3:
+                binnedData[n] = binim
+            else:
+                binnedData = binim
+
+    else:
+        if ndim == 2:
+            binnedData = cv2.resize(data.copy().astype(np.float32),binnedData.shape,interpolation=cv2.INTER_LANCZOS4)
+        else:
+            for n in range(binnedData.shape[0]):
+                binnedData[n] = cv2.resize(data[n].copy().astype(np.float32),binnedData.shape[1:],interpolation=cv2.INTER_LANCZOS4)
+        fourierMask = None
+
+    return binnedData, fourierMask
+
+
+def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, header_imgdirx_exists, imgdirx_flipped, cpos_arr, nbin, pmp_temp) -> np.ndarray:
     """Load, properly scale, flip in X if needed, and make any necessary corrections for particular flat fields
 
     Parameters
@@ -93,7 +209,11 @@ def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, hea
         set to True if the science data is flipped, function will flip the flat to match, OPTIONS: 'YES' or 'NO', or False
     cpos_arr: np.ndarray
         array containing the continuum positions of the science scans - to make sure that the flat cpos matches the science flat
-
+    nbin: int
+        binning factor, must be a power of 2
+    pmp_temp: str
+        PMP temperature of the science data to be demodulated, options are '45' or '50'
+    
     Returns
     -------
     flat
@@ -123,9 +243,12 @@ def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, hea
     # correction based on science data - see if flat and science are both flipped or not
     flat = compare_IMGDIRX(flat,header_imgdirx_exists,imgdirx_flipped,header_fltdirx_exists,fltdirx_flipped)
     
-    flat = np.moveaxis(flat, 0,-1) #so that it is [y,x,24]
-    flat = flat.reshape(2048,2048,6,4) #separate 24 images, into 6 wavelengths, with each 4 pol states
-    flat = np.moveaxis(flat, 2,-1)
+    if nbin > 1:
+        printc(f'Binning flat by a factor {nbin}',color=bcolors.WARNING)
+        flat = hot_pixel_mask(np.moveaxis(flat,0,-1),slice(0,flat.shape[1]),slice(0,flat.shape[2]),nbin=1)
+        flat = np.moveaxis(flat,-1,0)
+        flat, _ = binningFunction(flat, nbin, crop=True, apod='none', apc=2, fourier='cosine', fpc=5, shift=False)
+    flat = stokes_reshape(flat)
     
     print(flat.shape)
 
@@ -167,6 +290,54 @@ def load_and_process_flat(flat_f, accum_scaling, bit_conversion, scale_data, hea
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
 
     return flat, flat_pmp_temp, header_flat
+
+def load_cavity(cavity_f, wave_axis, nbin, rows, cols, returnWL = True):
+    """applies cavity shifts to the wave axis for use in RTE
+
+    Parameters
+    ----------
+    cavity_f : str or array
+        path to cavity map fits file or cavity array (already cropped)
+    wave_axis : array
+        wavelength axis
+    nbin : int
+        binning factor of the image
+    rows : array
+        rows of the pixels in the image, where the respective wavelength is shifted
+    cols : array
+        columns of the pixels in the image, where the respective wavelength is shifted
+
+    Returns
+    -------
+    new_wave_axis[rows, cols]: array
+        wavelength axis with the cavity shifts applied to the respective pixels
+    """
+    if isinstance(cavity_f,str):
+        cavityMap, _ = load_fits(cavity_f) # cavity maps
+        if nbin > 1:
+            printc(f'Binning cavity map by a factor {nbin}',color=bcolors.WARNING)
+            cavityMap, _ = binningFunction(cavityMap, nbin, crop=False, apod='none', apc=2, fourier='cosine', fpc=5, shift=False)
+        
+        if cavityMap.ndim == 3:
+            cavityWave = cavityMap[:,rows,cols].mean(axis=0)
+        else:
+            cavityWave = cavityMap[rows,cols]
+    else:
+        cavityMap = cavity_f
+        if nbin > 1:
+            printc(f'Binning cavity map by a factor {nbin}',color=bcolors.WARNING)
+            cavityMap, _ = binningFunction(cavityMap, nbin, crop=True, apod=False, apc=2, fourier='cosine', fpc=5, shift=False)
+        
+        if cavityMap.ndim == 3:
+            cavityWave = cavityMap.mean(axis=0)
+        else:
+            cavityWave = cavityMap
+        
+    if returnWL:
+        new_wave_axis = wave_axis[np.newaxis,np.newaxis] - cavityWave[...,np.newaxis]
+        return new_wave_axis
+    else:
+        return cavityWave
 
 
 def load_dark(dark_f) -> np.ndarray:
@@ -220,7 +391,7 @@ def load_dark(dark_f) -> np.ndarray:
         printc("ERROR, Unable to open and process darks file: {}",dark_f,color=bcolors.FAIL)
 
 
-def apply_dark_correction(data, dark, rows, cols) -> np.ndarray:
+def apply_dark_correction(data, dark, rows, cols, nbin) -> np.ndarray:
     """Apply dark field correction to the input data
 
     Parameters
@@ -233,7 +404,8 @@ def apply_dark_correction(data, dark, rows, cols) -> np.ndarray:
         rows to be used from dark - used in case data.shape does not agree with dark, or for testing
     cols: slice object
         columns to tbe used from dark - used in case data.shape does not agree with dark, or for testing
-
+    nbin: int
+        binning factor, must be a power of 2
     Returns
     -------
     data
@@ -243,7 +415,11 @@ def apply_dark_correction(data, dark, rows, cols) -> np.ndarray:
     print("-->>>>>>> Subtracting dark field")
     
     start_time = time.perf_counter()
-
+    if nbin > 1:
+        printc(f'Binning dark field by a factor {nbin}',color=bcolors.WARNING)
+        dark = hot_pixel_mask(dark,slice(0,dark.shape[0]),slice(0,dark.shape[1]),nbin=1)
+        dark, _ = binningFunction(dark, nbin, crop=True, apod='none', apc=2, fourier='cosine', fpc=5, shift=False)
+    
     data -= dark[rows,cols, np.newaxis, np.newaxis, np.newaxis] 
     #flat -= dark[..., np.newaxis, np.newaxis] #- # all processed flat fields should already be dark corrected
 
@@ -547,10 +723,10 @@ def flat_correction(data,flat,flat_states,cpos_arr,flat_pmp_temp=50,rows=slice(0
         printc("ERROR, Unable to apply flat fields",color=bcolors.FAIL)
 
 
-def prefilter_correctionNew(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_flipped = 'YES'):
+def prefilter_correction_WLS(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_flipped = 'YES', prefilter_f = '/data/slam/oba/prefilter/', filename = [''], nbin = 1):
     """
-    New prefilter correction based on JH email on 2023-08-17
-    Based on on-ground measurements at Meudon
+    New prefilter correction based on TO email on 2025-02-26
+    Based on wavelength scans on 2024-07-10
 
     Parameters
     ----------
@@ -564,36 +740,103 @@ def prefilter_correctionNew(data,wave_axis_arr,rows,cols,Tetalon=66,imgdirx_flip
         columns to be considered because of data cropping
     imgdirx_flipped: str
         check if data have been flipped (all the hrt-L1 data are flipped), DEFAULT = 'YES'
-
+    prefilter_f: str
+        directory where to find the prefilter files, DEFAULT = '/data/slam/oba/prefilter/'
+    filename: list
+        filled in the function with the filename of the selected prefilter. DEFAULT = ''
+    nbin: int
+        binning factor, must be a power of 2, DEFAULT = 1
+    
     Returns
     -------
     data: ndarray
         prefilter corrected data
     """
-    X,Y = np.meshgrid(np.arange(cols.start,cols.stop),np.arange(rows.start,rows.stop))
-    r = np.sqrt((X-934)**2 + (Y-1148)**2)
+    def _get_v1_index1(x):
+        # index1, v1 = min(enumerate([abs(i) for i in x]), key=itemgetter(1))
+        index1, v1 = min(enumerate(x), key = lambda i: abs(i[1]))
+        # return  x[index1], index1
+        return  v1, index1
+    
+    pf56_f = prefilter_f+'PF_transmittance_56deg_20240710_V20241213.fits'
+    pf61_f = prefilter_f+'PF_transmittance_61deg_20240710_V20241213.fits'
+    pf66_f = prefilter_f+'PF_transmittance_66deg_20240710_V20241213.fits'
 
-    CWL = -0.332253 - 4.81875e-05*r - 3.24533e-07*r**2 #  in AA, 0 is the line core of the Fe617 line (6173.343 AA)
-    FWHM = 2.59385 - 1.28984e-06*r - 7.38763e-09*r**2 # in AA
-    EXP = 3.65789 - 5.76046e-05*r - 3.52776e-08*r**2
+    # pf56_f = prefilter_f+'PF_transmittance_hrt_cavity_add_56deg_20240710_V20250604.fits'
+    # pf61_f = prefilter_f+'PF_transmittance_hrt_cavity_add_61deg_20240710_V20250604.fits'
+    # pf66_f = prefilter_f+'PF_transmittance_hrt_cavity_add_66deg_20240710_V20250604.fits'
+    # pf56_f = prefilter_f+'PF_transmittance_hrt_cavity_subtraction_56deg_20240710_V20250604.fits'
+    # pf61_f = prefilter_f+'PF_transmittance_hrt_cavity_subtraction_61deg_20240710_V20250604.fits'
+    # pf66_f = prefilter_f+'PF_transmittance_hrt_cavity_subtraction_66deg_20240710_V20250604.fits'
 
-    xx = lambda wl: np.abs((wl[:,np.newaxis,np.newaxis]-CWL)*2/FWHM)  # in AA, lambda=0 is the Fe line core
-    profile = lambda wl:  1/(1+xx(wl)**(2*EXP)) # max. transmission set to be 1. everywhere
-
-    wlref = 6173.341
-
+    wl56_f = prefilter_f+'Wavelength_axis_PF_transmittance_56deg_20240710_V20241213.fits'
+    wl61_f = prefilter_f+'Wavelength_axis_PF_transmittance_61deg_20240710_V20241213.fits'
+    wl66_f = prefilter_f+'Wavelength_axis_PF_transmittance_66deg_20240710_V20241213.fits'
+    
+    
+    if int(round(Tetalon)) == 56:
+        prefilter = fits.getdata(pf56_f) # (51,2048,2048)
+        prefilter_wave = fits.getdata(wl56_f) # (51,)
+        filename[0] = pf56_f.split('/')[-1]
+    elif int(round(Tetalon)) == 61:
+        prefilter = fits.getdata(pf61_f) # (51,2048,2048)
+        prefilter_wave = fits.getdata(wl61_f) # (51,)
+        filename[0] = pf61_f.split('/')[-1]
+    elif int(round(Tetalon)) == 66:
+        prefilter = fits.getdata(pf66_f) # (51,2048,2048)
+        prefilter_wave = fits.getdata(wl66_f) # (51,)
+        filename[0] = pf66_f.split('/')[-1]
+    else:
+        filename[0] = None
+        printc(f'The Etalon temperature is not in [56,61,66], but it is {int(round(Tetalon))}. No Prefilter correction applied',bcolors.WARNING)
+        return data
+    
+    if imgdirx_flipped == 'NO':
+        printc('Flipping prefilter on the Y axis')
+        prefilter = prefilter[:,:,::-1]
+    
+    if nbin > 1:
+        printc(f'Binning prefilter by a factor {nbin}',color=bcolors.WARNING)
+        prefilter, _ = binningFunction(prefilter, nbin, crop=True, apod=False, apc=2, fourier='cosine', fpc=5, shift=False)
+        
     for scan in range(data.shape[-1]):
-        # prefilter = profile(wave_axis_arr[scan]-wlref) # [wl,y,x]
-        # DC 20240612
-        prefilter = profile(wave_axis_arr[scan]-wlref-(Tetalon-66)*34.25e-3) # [wl,y,x] # Temperature shift of the prefilter by TO
-        prefilter = np.moveaxis(prefilter[...,np.newaxis],0,-1) # [y,x,1,wl]
-        if imgdirx_flipped == 'YES':
-            printc('Flipping prefilter on the Y axis')
-            prefilter = prefilter[:,::-1]
-        data[...,scan] /= prefilter
+        wave_list = wave_axis_arr[scan]
+        
+        for wv in range(len(wave_list)):
+
+            v = wave_list[wv]
+
+            vdif = [v - pf for pf in prefilter_wave]
+
+            v1, index1 = _get_v1_index1(vdif)
+            if v < prefilter_wave[-1] and v > prefilter_wave[0]:
+
+                if vdif[index1] >= 0:
+                    v2 = vdif[index1 + 1]
+                    index2 = index1 + 1
+
+                else:
+                    v2 = vdif[index1-1]
+                    index2 = index1 - 1
+
+                # imprefilter = (prefilter[:,:, index1]*(0-v1) + prefilter[:,:, index2]*(v2-0))/(v2-v1) #interpolation between nearest voltages
+
+            elif v >= prefilter_wave[-1]:
+                index2 = index1 - 1
+                v2 = vdif[index2]
+
+            elif v <= prefilter_wave[0]:
+                index2 = index1 + 1
+                v2 = vdif[index2]
+
+            imprefilter = (prefilter[index1,rows,cols]*v2 + prefilter[index2,rows,cols]*(-v1))/(v2-v1) #interpolation between nearest voltages
+
+            # imprefilter = (prefilter[:,:, index1]*v1 + prefilter[:,:, index2]*v2)/(v1+v2) #interpolation between nearest voltages
+
+            data[:,:,:,wv,scan] /= imprefilter[...,np.newaxis]
     return data
 
-def prefilter_correction(data,wave_axis_arr,prefilter,Tetalon=0,prefilter_voltages = None, TemperatureCorrection=True, TemperatureConstant = 40.323e-3, shift = None):
+def prefilter_correction(data,wave_axis_arr,prefilter,Tetalon=0,prefilter_voltages = None, TemperatureCorrection=True, TemperatureConstant = 40.1225e-3, shift = None, nbin = 1):
     """Apply prefilter correction to input data
 
     Parameters
@@ -610,7 +853,11 @@ def prefilter_correction(data,wave_axis_arr,prefilter,Tetalon=0,prefilter_voltag
         apply temperature correction to prefilter data, DEFAULT = False
     TemperatureConstant: float
         value of the temperature tuning constant to be used when TemperatureConstant is True, DEFAULT = 36.46e-3 mA/K
-
+    shift: ndarray or None
+        shift to be applied to the prefilter data pixel by pixel (cavity), DEFAULT = None
+    nbin: int
+        binning factor, must be a power of 2, DEFAULT = 1
+    
     Returns
     -------
     data: ndarray
@@ -648,7 +895,7 @@ def prefilter_correction(data,wave_axis_arr,prefilter,Tetalon=0,prefilter_voltag
         tunning_constant = 0.0003513 # this shouldn't change
         
         ref_wavelength = 6173.341 # this shouldn't change
-        prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength + TemperatureConstant*(Tfg-61) - 0.002 # JH ref
+        prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength + TemperatureConstant*(Tfg-61)
         # DC 20240612
         prefilter_wave += (Tetalon-66)*34.25e-3 # Temperature shift of the prefilter by TO
         
@@ -659,6 +906,10 @@ def prefilter_correction(data,wave_axis_arr,prefilter,Tetalon=0,prefilter_voltag
         tunning_constant = 0.0003513
         ref_wavelength = 6173.341 # this shouldn't change
         prefilter_wave = prefilter_voltages * tunning_constant + ref_wavelength
+    
+    if nbin > 1:
+        printc(f'Binning prefilter by a factor {nbin}',color=bcolors.WARNING)
+        prefilter, _ = binningFunction(prefilter, nbin, crop=True, apod=False, apc=2, fourier='cosine', fpc=5, shift=False)
     
     data_shape = data.shape
     
@@ -706,7 +957,7 @@ def prefilter_correction(data,wave_axis_arr,prefilter,Tetalon=0,prefilter_voltag
   
     return data
 
-def apply_field_stop(data, rows, cols, header_imgdirx_exists, imgdirx_flipped) -> np.ndarray:
+def apply_field_stop(data, rows, cols, header_imgdirx_exists, imgdirx_flipped, nbin) -> np.ndarray:
     """Apply field stop to input data
 
     Parameters
@@ -721,7 +972,9 @@ def apply_field_stop(data, rows, cols, header_imgdirx_exists, imgdirx_flipped) -
         if imgdirx exists in header
     imgdirx_flipped: str or bool
         if input data is flipped, OPTIONS: 'YES', 'NO', or False
-
+    nbin: int
+        binning factor, must be a power of 2
+    
     Returns
     -------
     data: ndarray
@@ -745,7 +998,19 @@ def apply_field_stop(data, rows, cols, header_imgdirx_exists, imgdirx_flipped) -
     if header_imgdirx_exists:
         if imgdirx_flipped == 'YES': #should be YES for any L1 data, but mistake in processing software
             field_stop = field_stop[:,::-1] #also need to flip the flat data after dark correction
-
+    if nbin > 1:
+        printc(f'Binning field stop by a factor {nbin}',color=bcolors.WARNING)
+        # field stop with no masking to avoid strange results at the edges when masking
+        field_stop, _ = binningFunction(field_stop, nbin, crop=False, apod=None, fourier=None, shift=False)
+        field_stop = field_stop > 0.99
+        # covering the apodization area
+        # apc = 2
+        # na=int(np.round(2048*apc/nbin/100,0))
+        # field_stop[:na+1] = 0
+        # field_stop[-na:] = 0
+        # field_stop[:,:na+1] = 0
+        # field_stop[:,-na:] = 0
+        
     data *= field_stop[rows,cols,np.newaxis, np.newaxis, np.newaxis]
 
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
@@ -800,8 +1065,7 @@ def crosstalk_2D_ItoQUV(data: np.ndarray,
                      mode: str = 'standard',
                      divisions: int = 16,
                      ind_wave: bool = False,
-                     continuum_pos: int = 0,
-                     VtoQU: bool = False):
+                     continuum_pos: int = 0):
     """
     crosstalk_ItoQUV calculates the cross-talk from Stokes $I$ to Stokes $Q$, $U$, and $V$.
 
@@ -839,8 +1103,7 @@ def crosstalk_2D_ItoQUV(data: np.ndarray,
     :type ind_wave: bool, optional
     :param continuum_pos: If ind_wave, this keyword is mandatory and contains the position of the continuum. defaults to 0.
     :type continuum_pos: int, optional
-    :param VtoQU: If True, it applies the retarder matrix when 'jaeggli' method is performed. defaults to False
-    :type VtoQU: bool, optional
+    
     :return: cross-talk parameters
     :rtype: List of np.ndarray
     """
@@ -857,11 +1120,15 @@ def crosstalk_2D_ItoQUV(data: np.ndarray,
         # check two conditions:
         # 1) mask should be > 0 and intensity above lower_threshold
 
-        if mask_set:
-            idx = (xI != 0)
-        else:
-            idx = (xI != 0) & (xI > (lower_threshold/100. * norma))
+        # if mask_set:
+        #     idx = (xI != 0)
+        # else:
+        idx = (xI != 0) & (xI > (lower_threshold/100. * norma))
 
+        if np.sum(idx) < 10 or np.size(xI) < 10:
+            printc('Not enough data points for cross-talk fit. Returning zeros.', color=bcolors.WARNING)
+            return np.zeros(2), np.zeros(2), np.zeros(2)
+        
         xI = xI[idx]
         yQ = yQ[idx]
         yU = yU[idx]
@@ -872,6 +1139,10 @@ def crosstalk_2D_ItoQUV(data: np.ndarray,
         yP = np.sqrt(yQ**2 + yU**2 + yV**2)
         idx = yP < (threshold/100. * norma)
         # plt.figure(); plt.hist(yP,100); plt.axvline((threshold/100. * norma),color='r'); plt.show()
+        if np.sum(idx) < 10 or np.size(xI) < 10:
+            printc('Not enough data points for cross-talk fit. Returning zeros.', color=bcolors.WARNING)
+            return np.zeros(2), np.zeros(2), np.zeros(2)
+        
         xI = xI[idx]
         yQ = yQ[idx]
         yU = yU[idx]
@@ -963,10 +1234,11 @@ def crosstalk_2D_ItoQUV(data: np.ndarray,
         if mask.ndim != 2:
             printc('Input mask shall have 2 dimensions but it is of ',mask.ndim,' dimensions',color=bcolors.FAIL)
             ValueError("Check dimensions of input mask into crosstalk_ItoQUV")
-        mask_set = True
+        # mask_set = True
     else:
-        mask = np.zeros((yd,xd),dtype=bool)
-        mask[int(yd//2-yd//4):int(yd//2+yd//4),int(xd//2-xd//4):int(xd//2+xd//4)]
+        mask = np.ones((yd,xd),dtype=bool)
+        # mask[int(yd//2-yd//4):int(yd//2+yd//4),int(xd//2-xd//4):int(xd//2+xd//4)]
+        # mask_set = False
 
     # threshold = 0.5
     # lower_threshold = 40.
@@ -1092,13 +1364,18 @@ def crosstalk_2D_ItoQUV(data: np.ndarray,
         
         # correction
         corrected_data = np.copy(data)
-        corrected_data[:, :, 1] = data[:, :, 1] - sfitQ[0][0][...,np.newaxis] * data[:, :, 0] - sfitQ[1][0][...,np.newaxis]
-        corrected_data[:, :, 2] = data[:, :, 2] - sfitU[0][0][...,np.newaxis] * data[:, :, 0] - sfitU[1][0][...,np.newaxis]
-        corrected_data[:, :, 3] = data[:, :, 3] - sfitV[0][0][...,np.newaxis] * data[:, :, 0] - sfitV[1][0][...,np.newaxis]
+        if ind_wave:
+            wavelength_norm = data[mask>0,0,continuum_pos].mean()/data[mask>0,0,:].mean(0)
+        else:
+            wavelength_norm = 1
+        
+        corrected_data = np.copy(data)
+        corrected_data[:, :, 1] = data[:, :, 1] - wavelength_norm*sfitQ[0][0][...,np.newaxis] * data[:, :, 0] - wavelength_norm*sfitQ[1][0][...,np.newaxis]
+        corrected_data[:, :, 2] = data[:, :, 2] - wavelength_norm*sfitU[0][0][...,np.newaxis] * data[:, :, 0] - wavelength_norm*sfitU[1][0][...,np.newaxis]
+        corrected_data[:, :, 3] = data[:, :, 3] - wavelength_norm*sfitV[0][0][...,np.newaxis] * data[:, :, 0] - wavelength_norm*sfitV[1][0][...,np.newaxis]
 
         return cQ, cU, cV, sfitQ, sfitU, sfitV, corrected_data
     
-    elif mode == 'jaeggli':
         def _polmodel1(D,theta,chi):
             dH = D*np.cos(chi)*np.sin(theta)
             d45 = D*np.sin(chi)*np.sin(theta)
@@ -1476,7 +1753,7 @@ def CT_ItoQUV(data, ctalk_params, norm_stokes, cpos_arr, Ic_mask):
     return data
 
 
-def hot_pixel_mask(data, rows, cols, mode='median'):
+def hot_pixel_mask(data, rows, cols, mode = 'median', nbin = 1):
     """
     Apply hot pixel mask to the data, just after cross talk to remove pixels that diverge
     
@@ -1490,7 +1767,8 @@ def hot_pixel_mask(data, rows, cols, mode='median'):
         columns of the data to be corrected
     mode: str
         'median' or 'mean' to apply to the data
-
+    nbin: int
+        binning factor  (Default: 1)
     Returns
     -------
     data: ndarray
@@ -1503,10 +1781,18 @@ def hot_pixel_mask(data, rows, cols, mode='median'):
     
     s = data.shape # [y,x,p,l,s]
     
+    if nbin > 1:
+        hot_pix_mask, _ = binningFunction(hot_pix_mask > 0, nbin, crop=True, apod=False, apc=2, fourier=False, fpc=5, shift=False)
+        hot_pix_mask = binary_fill_holes(hot_pix_mask > .9)
+        hot_pix_cont = binary_dilation(hot_pix_mask>0,np.ones((3,3)),iterations=int(5//nbin))
+        hot_pix_cont[hot_pix_mask] = 0
+        hot_pix_mask,_ = label(hot_pix_mask)
+        hot_pix_cont,_ = label(hot_pix_cont)
+
     if mode == 'median':
-        func = lambda a: np.median(a,axis=0)
+        func = lambda a, axis: np.nanmedian(a,axis)
     elif mode == 'mean':
-        func = lambda a: np.mean(a,axis=0)
+        func = lambda a, axis: np.nanmean(a,axis)
     else:
         print('mode not found, input dataset not corrected')
         return data
@@ -1517,30 +1803,467 @@ def hot_pixel_mask(data, rows, cols, mode='median'):
         bad = (hot_pix_mask[rows,cols] == i)
         if np.sum(bad) > 0:
             med = (hot_pix_cont[rows,cols] == i)
-            data[bad] = func(data[med])
+            data[bad] = func(data[med],0)
     
     return data
 
+def limb_side_finder(img, hdr,verbose=True):
+    """find the limb in the image
+
+    Parameters
+    ----------
+    img : 2D array
+        data array
+    hdr : header
+        header of the fits file
+    verbose : bool, optional
+        print the limb side, by default True
     
-def crosstalk_auto_VtoQU(data_demod,cpos,wl,roi=np.ones((2048,2048)),verbose=0,npoints=5000,nlevel=0.3):
+    Returns
+    -------
+    side: str
+        limb side
+    center: [x,y] 
+        coordinates of the solar disk center (units: pixel)
+    Rpix: float
+        Radius of solar disk in pixels
+    sly: slice
+        slice in y direction to be used for normalisation
+    slx: slice
+        slice in x direction to be used for normalisation
+    """
+    try:
+        Rpix=(hdr['RSUN_ARC']/hdr['CDELT1'])
+    except:
+        Rpix=(hdr['RSUN_OBS']/hdr['CDELT1'])
+    center = center_coord(hdr)[:2] - 1
+    # limb_wcs = circular_mask(hdr['PXEND2']-hdr['PXBEG2']+1,
+    #                          hdr['PXEND1']-hdr['PXBEG1']+1,center,Rpix)
+    
+    mus = mu_angle(hdr,np.asarray([[0,0],
+                       [hdr['NAXIS1'],0],
+                       [hdr['NAXIS1'],hdr['NAXIS2']],
+                       [0,hdr['NAXIS2']]],
+                      dtype=float).T
+                    )
+    
+    if np.any(np.isnan(mus)) or np.any(mus <= 0.2):
+        x0 = hdr['NAXIS1']/2 - center[0]
+        y0 = hdr['NAXIS2']/2 - center[1]
+        angle = np.arctan(y0/x0) * 180/np.pi
+
+        if x0 < 0 and y0 >= 0:
+            angle += 180
+        elif x0 < 0 and y0 < 0:
+            angle +=180
+        elif x0 >= 0 and y0 < 0:
+            angle += 360
+
+        limbs = ['W','NW','N','NE','E','SE','S','SW','W']
+        limb_idx = find_nearest(np.arange(0,361,45),angle)
+        side = limbs[limb_idx]
+        if verbose:
+            print('Limb side:',side)
+    else:
+        side = ''
+        if verbose:
+            print('Limb is not in the FoV according to WCS keywords')
+
+    ds = int(256//hdr['NBIN1'])
+    if hdr['DSUN_AU'] < 0.4:
+        if side == '':
+            ds = int(384//hdr['NBIN1'])
+    dx = 0; dy = 0
+    if 'N' in side and img.shape[0]//2 - ds > img.shape[0]//4:
+        dy = -img.shape[0]//4
+    if 'S' in side and img.shape[0]//2 - ds > img.shape[0]//4:
+        dy = img.shape[0]//4
+    if 'W' in side and img.shape[1]//2 - ds > img.shape[1]//4:
+        dx = -img.shape[1]//4
+    if 'E' in side and img.shape[1]//2 - ds > img.shape[1]//4:
+        dx = img.shape[1]//4
+
+    if img.shape[0] > 2*ds:
+        sly = slice(img.shape[0]//2 - ds + dy, img.shape[0]//2 + ds + dy)
+    else:
+        sly = slice(0,img.shape[0])
+    if img.shape[1] > 2*ds:
+        slx = slice(img.shape[1]//2 - ds + dx, img.shape[1]//2 + ds + dx)
+    else:
+        slx = slice(0,img.shape[1])
+    
+    return side, center, Rpix, sly, slx
+
+#### New Limb fitting ###
+def double_gaus(x,a0,x0,sigma0,a1,x1,sigma1):
+    """return Gauss function
+
+    Parameters
+    ----------
+    x : array
+        x values
+    a0 : float
+        gaussian nr.1 amplitude
+    x0 : float
+        gaussian nr.1 mean x value
+    sigma0 : float
+        gaussian nr.1 standard deviation
+    a1 : float
+        gaussian nr.2 amplitude
+    x1 : float
+        gaussian nr.2 mean x value
+    sigma1 : float
+        gaussian nr.2 standard deviation
+
+    Returns
+    -------
+    Double Gauss Function : array
+    """
+    return a0*np.exp(-(x-x0)**2/(2*sigma0**2)) + a1*np.exp(-(x-x1)**2/(2*sigma1**2))
+
+def double_gaussian_fit(a,show=True,covariance=False,partial=4):
+    """Two Gaussian fit for data 'a' from np.histogram or plt.hist
+    The gaussian must be complitely separated and on opposite sides of the distribution
+    Parameters
+    ----------
+    a : array
+        output from np.histogram or plt.hist
+    show : bool, optional
+        show plot of fit, by default True
+    covariance: bool, optional
+        if True, reutn the covariance matrix (Default: False)
+    partial: int, optional
+        fraction of array to use for fitting the first gaussian, (Default: 4)
+    Returns
+    -------
+    p : array
+        fitted coefficients for Double Gaussian function
+    """
+    xx=a[1][:-1] + (a[1][1]-a[1][0])/2
+    y=a[0][:]
+    # p0 = np.ones(6)
+    xx1 = xx[:xx.size//partial]; xx2 = xx[xx.size//partial:]
+    y1 = y[:y.size//partial]; y2 = y[y.size//partial:]
+    p0=[max(y1),sum(xx1*y1)/sum(y1),np.sqrt(sum(y1 * (xx1 - sum(xx1*y1)/sum(y1))**2) / sum(y1)),max(y2),sum(xx2*y2)/sum(y2),np.sqrt(sum(y2 * (xx2 - sum(xx2*y2)/sum(y2))**2) / sum(y2))] #weighted avg of bins for avg and sigma inital values
+    # p0[0]=y1[find_nearest(xx1,p0[1])-5:find_nearest(xx1,p0[1])+5].mean() #find init guess for ampltiude of gauss func
+    # p0[3]=y2[find_nearest(xx2,p0[1])-5:find_nearest(xx2,p0[1])+5].mean() #find init guess for ampltiude of gauss func
+    
+    try:
+        bounds = ([0,xx1.min(),-xx1.max(),0,xx2.min(),-xx1.max()],[y1.sum(),xx1.max(),xx1.max(),y2.sum(),xx2.max(),xx1.max()])
+        p,cov=spo.curve_fit(double_gaus,xx,y,p0=p0,bounds=bounds)
+        if show:
+            lbl = '{:.2e} $\pm$ {:.2e}\n{:.2e} $\pm$ {:.2e}'.format(p[1],p[2],p[4],p[5])
+            plt.plot(xx,double_gaus(xx,*p),'r--', label=lbl)
+            plt.legend(fontsize=9)
+        if covariance:
+            return p,cov
+        else:
+            return p
+    except:
+        printc("Gaussian fit failed: return initial guess",color=bcolors.WARNING)
+        if covariance:
+            cov = np.zeros((len(p0),len(p0))); cov[:] = np.nan
+            return p0, cov
+        else:
+            return p0
+    
+def elliptical_mask(shape,p):
+    """
+    Ellipse mask
+
+    Parameters
+    ----------
+    shape : tuple
+            shape of the mask
+    p : list
+        [a,b,h,k,A] - ellipse axes (x,y), centers (x,y) and angle
+
+    Returns
+    -------
+    mask: numpy.ndarray
+          Boolean elliptical mask with 1 inside the ellipse and 0 outside
+    """    
+    a,b,h,k,A = p
+    x,y = np.meshgrid(np.arange(shape[1]),np.arange(shape[0]))
+    mask = np.zeros(shape)
+    mask[((x-h)*np.cos(A)+(y-k)*np.sin(A))**2/a**2+((x-h)*np.sin(A)-(y-k)*np.cos(A))**2/b**2 <= 1] = 1
+
+    return mask
+
+def elliptical_mu_map(shape,p):
+    """
+    Ellipse mask
+
+    Parameters
+    ----------
+    shape : tuple
+            shape of the mask
+    p : list
+        [a,b,h,k,A] - ellipse axes (x,y), centers (x,y) and angle
+
+    Returns
+    -------
+    mumap: numpy.ndarray
+          mu value map using the values from the ellipse
+    """    
+    a,b,h,k,A = p
+    x,y = np.meshgrid(np.arange(shape[1]),np.arange(shape[0]))
+    # ellipse defined as the normalized distance from the center
+    ell = ((x-h)*np.cos(A)+(y-k)*np.sin(A))**2/a**2+((x-h)*np.sin(A)-(y-k)*np.cos(A))**2/b**2
+    ell = np.where(ell>1,0,ell)
+    # mu map
+    mumap = np.sqrt(1-ell**2)
+
+    return mumap
+
+
+def fit_plane(data, mask=None, order=1):
+
+    """
+    Fit 2D plane to data. Will be replazed by a global one (comming from had-hoc branch) at some point.
+    """
+    def _polyfit2d(a,XY,order):
+        from scipy.optimize import curve_fit
+        sz = a.shape
+        try:
+            X,Y = XY
+        except:
+            X,Y = np.meshgrid(np.arange(sz[1])-sz[1]//2,np.arange(sz[0])-sz[0]//2)
+        fit_func = lambda x, *p : poly2d(order,x,*p)
+        
+        try:
+            X = X[~X.mask]; Y = Y[~Y.mask]; a = a[~a.mask]
+        except:
+            pass
+        N = np.arange(1,order+2).sum()
+        popt, pcov = curve_fit(fit_func, (X,Y), a.ravel(),p0=np.ones(N))
+        
+        return popt#, np.reshape(poly2d(order,(X,Y), *popt), sz),
+
+    def poly2d(m, X, *p):
+        x,y = X
+        z = np.zeros(x.shape)
+        n = 0
+        for k in range(1,m+1):
+            for i in range(k+1):
+                z += x**(k-i) * y**i * p[n]
+                n += 1
+        z += p[-1]
+        return z.ravel()
+    
+    yd, xd = data.shape
+    x = np.arange(xd)
+    y = np.arange(yd)
+    X, Y = np.meshgrid(x, y)
+
+    if mask is not None:
+        X_masked = X[mask]
+        Y_masked = Y[mask]
+        Z_masked = data[mask]
+    else:
+        X_masked = X
+        Y_masked = Y
+        Z_masked = data
+
+    p = _polyfit2d(Z_masked.flatten(),(X_masked.flatten(),Y_masked.flatten()),order)
+    P = np.reshape(poly2d(order,(X,Y), *p), (yd,xd))
+
+    return (P, p)
+
+def subROIconstrast(img, img_mask, windowSize, windowSeparation):
+    """Align the mod (pol) states 2,3,4 with state 1 for a given wavelength
+    loop through all wavelengths
+
+    Parameters
+    ----------
+    img: ndarray
+        2D input image array
+    img_mask: boolean ndarray
+        mask that defines where to compute the contrast
+    windowSize: int
+        half size of the sub regions where to compute the contrast
+    windowSeparation: int
+        sepration between the center of the sub regions where to compute the contrast
+    
+    Returns
+    -------
+    contrast: ndarray
+        values of the contrast (all zeros except for the pixels corresponding to the center of the sub regions)
+
+    """
+
+    data_size = img.shape
+    contrast = np.zeros((img.shape))
+    # shift_raw = np.zeros((2,pn*wln))
+
+    for i in list(range(int(50),int(data_size[0]-50),windowSeparation))+list(range(int(data_size[0]-50),int(50),-windowSeparation)):
+        for j in list(range(int(50),int(data_size[1]-50),windowSeparation))+list(range(int(data_size[1]-50),int(50),-windowSeparation)):
+             # print(f'({i}/{data_size[0]}, {j}/{data_size[1]})')#\r',end='')
+            roi = (slice(i-windowSize,i+windowSize),slice(j-windowSize,j+windowSize))
+            if img_mask[roi].sum() == 4*windowSize**2:
+                temp = img[roi].copy()
+                # detrend
+                # temp /= fit_plane(temp.copy(),order=5)[0]
+                contrast[i,j] = np.nanstd(temp)/np.nanmean(temp)
+            
+    return contrast
+
+def limb_ellipse(img, hdr, field_stop, AR_mask, verbose=True, percent=False, fit_results=False, high_contrast = True, debug=False):
+    """Fits limb to the image using least squares method.
+
+    Parameters
+    ----------
+    img : numpy.ndarray
+        Image to fit limb to.
+    hdr : astropy.io.fits.header.Header
+        header of fits file
+    field_stop : array
+        field stop array
+    verbose : bool, optional
+        Print limb fitting results, by default True
+    percent : bool, optional
+        return mask with 96% of the readius, by default False
+    fit_results : bool, optional
+        return results of the circular fit, by default False
+    high_contrast : bool, optional
+        if true it returns slices from the region with higher contrast instead of those from limb_side_finder, by default True
+    debug: bool, optional
+        if True, return dictionary with all the variables, by default False
+    Returns
+    -------
+    mask100: numpy.ndarray
+        masked array (ie off disc region) with 100% of the radius
+    sly: slice
+        slice in y direction to be used for normalisation (ie good pixels on disc)
+    slx: slice
+        slice in x direction to be used for normalisation (ie good pixels on disc)
+    side: str
+        limb side
+    mask96: numpy.ndarray
+        masked array (ie off disc region) with 96% of the radius (only if percent = True)
+    p: scipy.optimize._optimize.OptimizeResult
+        Result of the least sqaure ellipse fit
+    """
+
+    def _residuals(p,x,y):
+        """
+        Finding the residuals of the fit
+
+        Parameters
+        ----------
+        p : list
+            [a,b,h,k,A] - ellipse axes (x,y), centers (x,y) and angle
+        x : float
+            test x coordinate
+        y : float
+            test y coordinate
+
+        Returns
+        -------
+        residual = ((x-h)*np.cos(A)+(y-k)*np.sin(A))**2/a**2 + (-(x-h)*np.sin(A)+(y-k)*np.cos(A))**2/b**2 - 1
+        """
+
+        a,b,h,k,A = p
+        residual = ((x-h)*np.cos(A)+(y-k)*np.sin(A))**2/a**2 + (-(x-h)*np.sin(A)+(y-k)*np.cos(A))**2/b**2 - 1
+
+        return residual
+
+    from scipy.optimize import least_squares
+    from scipy.ndimage import binary_erosion, binary_dilation
+
+    side, center, Rpix, sly, slx = limb_side_finder(img,hdr,verbose=verbose)
+    if side == '': # margin on side in limb_side_finder
+        output = [None,sly,slx,side]
+        
+        if percent:
+            output += [None]
+        if fit_results:
+            output += [None]    
+
+        return output
+
+    s = 5
+    temp = img.copy()[s:-s,s:-s][AR_mask[s:-s,s:-s]>0].flatten()
+    hi = np.histogram(temp,bins=np.linspace(-temp.max()/50,temp.max(),100)); del temp
+    gres, cov = double_gaussian_fit(hi,False,True,4)
+    
+    if (np.any((np.sqrt(np.diagonal(cov))/gres)[:3] > 100) or np.any(np.isnan(cov))) or gres[1] > gres[4]*0.7: # sometimes south pole limb is not found, so extra condition on fit
+        output = [None,sly,slx,'']
+        printc('Despite the WCS, it looks like the Limb is not in the FoV',bcolors.WARNING)
+        
+        if debug:
+            return {'hi':hi,'gres':gres,'cov':cov,'center':center,'Rpix':Rpix}
+        if percent:
+            output += [None]
+        if fit_results:
+            output += [None]    
+
+        return output
+
+    xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
+    thr = xx[find_nearest(xx,min(gres[1],gres[4]))+np.argmin(hi[0][find_nearest(xx,min(gres[1],gres[4])):find_nearest(xx,max(gres[1],gres[4]))])]
+
+    limb_mask = img[s:-s,s:-s]>thr;
+    
+    # dilation and erosion to remove any possible zeros coming from umbrae
+    # border_value=1 in erosion to avoid black edges
+    limb_mask = binary_erosion(binary_dilation(limb_mask,[[0,1,0],[1,1,1],[0,1,0]],iterations=20),[[0,1,0],[1,1,1],[0,1,0]],iterations=20,border_value=1)
+    
+    # erosion of field stop to avoid edges from there
+    limb_edge = image_derivative(limb_mask)*binary_erosion(field_stop[s:-s,s:-s],[[0,1,0],[1,1,1],[0,1,0]],iterations=5)
+    yi, xi = np.where(limb_edge>0.9)
+
+    p = least_squares(_residuals,x0 = [Rpix,Rpix,center[0],center[1],0], args=(xi,yi),
+                              bounds = ([Rpix-100,Rpix-100,center[0]-300,center[1]-300,-np.pi/2],[Rpix+100,Rpix+100,center[0]+300,center[1]+300,np.pi/2]))
+
+    mask100 = elliptical_mask(img.shape,p.x)
+    mask98 = elliptical_mask(img.shape,[p.x[0]*.98,p.x[1]*.98,p.x[2],p.x[3],p.x[4]])
+    mask96 = elliptical_mask(img.shape,[p.x[0]*.96,p.x[1]*.96,p.x[2],p.x[3],p.x[4]])
+    
+    if high_contrast:
+        # if hdr['DSUN_AU'] < 0.4:
+        #     windowSize = 384
+        # else:
+        windowSize = int(256//hdr['NBIN1'])
+        # clv = CLV(muSO_map(hdr,img.shape))
+        clv = CLV(elliptical_mu_map(img.shape,p.x))
+        contrast256 = subROIconstrast(img.copy()/clv, (field_stop*mask98)>0, windowSize, windowSize)
+        # contrast256 = subROIconstrast(img.copy(), (field_stop*mask98)>0, windowSize, windowSize)
+        i,j = np.unravel_index(np.argmax(contrast256),contrast256.shape)
+        sly,slx = slice(i-windowSize,i+windowSize), slice(j-windowSize,j+windowSize)
+        print('\nHigh contrast slices: ',sly,slx,'\n')
+
+    output = [sly,slx,side]
+
+    output = [mask100] + output
+    
+    if debug:
+        return {'mask100':mask100,'mask96':mask96,'hi':hi,'gres':gres,'thr':thr,'xx':xx,'limb_mask':limb_mask,'limb_edge':limb_edge,'yi':yi,'xi':xi,'p':p}
+    if percent:
+        output += [mask96]
+    if fit_results:
+        output += [p]    
+
+    return output
+    ######
+
+def crosstalk_auto_VtoQU(data_demod,wl,roi=np.ones((2048,2048)),verbose=0,npoints=5000,nlevel=0.3):
     """Get crosstalk coefficients for V to Q,
 
     Parameters
     ----------
     data_demod: ndarray
         input data that has been demodulated
-    cpos: int
-        continuum position
     wl: int
-        wavelength position
+        wavelengths position
     roi: ndarray
         region of interest
     verbose: bool/int
         if True, plot results
     npoints: int
         number of points to use for fitting
-    limit: float
-        limit for Stokes I to be considered for fitting
+    nlevel: float
+        limit for Stokes V to be considered for fitting
 
     Returns
     -------
@@ -1556,9 +2279,8 @@ def crosstalk_auto_VtoQU(data_demod,cpos,wl,roi=np.ones((2048,2048)),verbose=0,n
     my = []
     sy = []
     
-    x = data_demod[roi>0,3,cpos].flatten()
-    lx = data_demod[roi>0,0,cpos].flatten()
-    lv = np.abs(data_demod[roi>0,3,cpos]).flatten()
+    x = data_demod[roi>0,3,wl].flatten()
+    lv = np.abs(data_demod[roi>0,3,wl]).flatten()
     
     ids = (lv > nlevel/100.)
     x = x[ids].flatten()
@@ -1607,7 +2329,7 @@ def crosstalk_auto_VtoQU(data_demod,cpos,wl,roi=np.ones((2048,2048)),verbose=0,n
 
         print('Cross-talk from V to Q: slope = {: {width}.{prec}f} ; off-set = {: {width}.{prec}f} '.format(cQ[0],cQ[1],width=8,prec=4))
         print('Cross-talk from V to U: slope = {: {width}.{prec}f} ; off-set = {: {width}.{prec}f} '.format(cU[0],cU[1],width=8,prec=4))
-    
+        plt.show()
 #         return cQ,cU,cV, (idx,x,xp,yQ,yU,yV,pQ,pU,pV,mx,sx,my,sy)
     else:
         printc('Cross-talk from V to Q: slope = {: {width}.{prec}f} ; off-set = {: {width}.{prec}f} '.format(cQ[0],cQ[1],width=8,prec=4),color=bcolors.OKGREEN)
@@ -1650,7 +2372,7 @@ def CT_VtoQU(data, ctalk_params):
     return data
 
 
-def polarimetric_registration(data, sly, slx, hdr_arr):
+def polarimetric_registration(data, sly, slx, hdr_arr, derivative=True):
     """Align the mod (pol) states 2,3,4 with state 1 for a given wavelength
     loop through all wavelengths
 
@@ -1664,7 +2386,8 @@ def polarimetric_registration(data, sly, slx, hdr_arr):
         slice in x direction
     hdr_arr: ndarray
         header array
-    
+    derivative: bool
+        if True, the spatial derivative of the images is used in the correlation
     Returns
     -------
     data: ndarray
@@ -1689,8 +2412,12 @@ def polarimetric_registration(data, sly, slx, hdr_arr):
             if j%pn == 0:
                 pass
             else:
-                ref = image_derivative(old_data[:,:,0,j//pn,scan])[sly,slx]
-                temp = image_derivative(old_data[:,:,j%pn,j//pn,scan])[sly,slx]
+                if derivative:
+                    ref = image_derivative(old_data[:,:,0,j//pn,scan])[sly,slx]
+                    temp = image_derivative(old_data[:,:,j%pn,j//pn,scan])[sly,slx]
+                else:
+                    ref = old_data[sly,slx,0,j//pn,scan]
+                    temp = old_data[sly,slx,j%pn,j//pn,scan]
                 it = 0
                 s = [1,1]
                 
@@ -1699,8 +2426,10 @@ def polarimetric_registration(data, sly, slx, hdr_arr):
                     s = [sr[1],sc[1]]
                     shift_raw[:,j] = [shift_raw[0,j]+s[0],shift_raw[1,j]+s[1]]
                     
-                    temp = image_derivative(fft_shift(old_data[:,:,j%pn,j//pn,scan], shift_raw[:,j]))[sly,slx]
-
+                    if derivative:
+                        temp = image_derivative(fft_shift(old_data[:,:,j%pn,j//pn,scan], shift_raw[:,j]))[sly,slx]
+                    else:
+                        temp = fft_shift(old_data[:,:,j%pn,j//pn,scan], shift_raw[:,j])[sly,slx]
                     it += 1
                     if it ==10:
                         break
@@ -1716,7 +2445,7 @@ def polarimetric_registration(data, sly, slx, hdr_arr):
     return data, hdr_arr
     
 
-def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr):
+def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr, derivative = True, deconv=False):
     """Align the wavelengths, from the Stokes I image, (after demodulation), using cv2.warpAffine
 
     Parameters
@@ -1731,7 +2460,11 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr):
         slice in x direction
     hdr_arr: ndarray
         header array
-    
+    derivative: bool
+        if True, the spatial derivative of the images is used in the correlation (Default: True)
+    deconv: bool
+        if True, array is deconvolved before the correlation (Default: False)
+
     Returns
     -------
     data: ndarray
@@ -1740,57 +2473,146 @@ def wavelength_registration(data, cpos_arr, sly, slx, hdr_arr):
         header array with updated CAL_WREG keyword
     """
 
-    pn = 4
-    wln = 6
-    
     if cpos_arr[0] == 5:
-        l_i = [0,1,3,4,2] # shift wl
+        l_i =    [0,1,3,4,2] # shift wl
+        refl_i = [5,0,1,5,3]
         cwl = 2
     else:
-        l_i = [1,2,4,5,3] # shift wl
+        l_i =    [1,2,4,5,3] # shift wl
+        refl_i = [0,1,2,0,4]
+        # l_i =    [1,2,3,4,5] # shift wl
+        # refl_i = [0,1,2,3,4]
         cwl = 3
     
-    old_data = data.copy()
-
+    # new_data = data.copy()
+        
     data_shape = data.shape
+    _,_,pn,wln,_ = data_shape
     data_size = data_shape[:2]
-    
+    if derivative:
+        im_der = lambda x: image_derivative(x)
+    else:
+        im_der = lambda x: x
+
     for scan in range(data_shape[-1]):
-        shift_stk = np.zeros((2,wln-1))
-        ref = image_derivative(old_data[:,:,0,cpos_arr[0],scan])[sly,slx]
-        
-        for i,l in enumerate(l_i):
-            temp = image_derivative(old_data[:,:,0,l,scan])[sly,slx]
-            it = 0
-            s = [1,1]
-            if l == cwl:
-                temp = image_derivative(np.abs(old_data[:,:,0,l,scan]))[sly,slx]
-                ref = image_derivative(np.abs((data[:,:,0,l-1,scan] + data[:,:,0,l+1,scan]) / 2))[sly,slx]
-            
-            while np.any(np.abs(s)>.5e-2):#for it in range(iterations):
-                sr, sc, r = SPG_shifts_FFT(np.asarray([ref,temp]))
-                s = [sr[1],sc[1]]
-                shift_stk[:,i] = [shift_stk[0,i]+s[0],shift_stk[1,i]+s[1]]
-                temp = image_derivative(fft_shift(old_data[:,:,0,l,scan].copy(), shift_stk[:,i]))[sly,slx]
 
-                it += 1
-                if it == 10:
-                    break
-            print(it,'iterations shift (x,y):',round(shift_stk[1,i],3),round(shift_stk[0,i],3))
-            
-            for ss in range(pn):
-                Mtrans = np.float32([[1,0,shift_stk[1,i]],[0,1,shift_stk[0,i]]])
-                data[:,:,ss,l,scan]  = cv2.warpAffine(old_data[:,:,ss,l,scan].copy().astype(np.float32), Mtrans, data_size[::-1], flags=cv2.INTER_LANCZOS4)
+        if deconv != False and isinstance(deconv, dict):
+            if deconv['deconvolution']:
+                if deconv['auto']:
+                    PSFt = [datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']),hdr_arr[scan]['DSUN_AU'], np.sign(hdr_arr[scan]['OBS_VR'])]
+                else:
+                    PSFt = datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS'])
+                from sophi_hrt_pipe.PSF import fran_restore
+                dat = data[sly.start-5:sly.stop+5,slx.start-5:slx.stop+5,:,:,scan].copy()
+                # old_data, _ = fran_restore(dat, datetime.datetime.fromisoformat(hdr_arr[scan]['DATE-OBS']),
+                #                             mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0.02, low_f=0.8, aberr_cor=False)
+                old_data, _, _ = fran_restore(dat, PSFt, 
+                                              sly=slice(0,dat.shape[0]), slx=slice(0,dat.shape[1]),
+                                              mask=np.ones((dat.shape[0],dat.shape[1])), gamma2=0, low_f=0.1, aberr_cor=False, 
+                                              PD_f=deconv['PD_f'], straylight_corr=deconv['straylight_correction'], nbin=hdr_arr[scan]['NBIN1'])
+                sly, slx = slice(5,sly.stop-sly.start+5), slice(5,slx.stop-slx.start+5)
+            else:
+                old_data = data[...,scan].copy()
+        else:
+            old_data = data[...,scan].copy()
 
-            if l == cwl:
-                ref = image_derivative(old_data[:,:,0,cpos_arr[0],scan])[sly,slx]
+        count_repeat = 1
+        hdr_arr[scan]['CAL_WREG'] = ''
+        while count_repeat%3: # repeat the correlation if limit of 10 iterations is reached (max 3 more times)
+            count_repeat += 1
+            repeat=0
+            shift_stk = np.zeros((2,wln))
+            for i,l in enumerate(l_i):
+
+                ref = im_der(old_data[:,:,0,refl_i[i]].copy())[sly,slx]
+                temp = im_der(old_data[:,:,0,l].copy())[sly,slx]
+                it = 0
+                s = [1,1]
+                # if l == cwl:
+                #     temp = im_der(np.abs(old_data[:,:,0,l,scan]))[sly,slx]
+                #     ref = im_der(np.abs((data[:,:,0,l-1,scan] + data[:,:,0,l+1,scan]) / 2))[sly,slx]
+                
+                while np.any(np.abs(s)>.5e-2):#for it in range(iterations):
+                    sr, sc, r = SPG_shifts_FFT(np.asarray([ref,temp]))
+                    s = [sr[1],sc[1]]
+                    shift_stk[:,l] = [shift_stk[0,l]+s[0],shift_stk[1,l]+s[1]]
+                    temp = im_der(fft_shift(old_data[:,:,0,l].copy(), shift_stk[:,l]))[sly,slx]
+
+                    it += 1
+                    if it == 10:
+                        repeat += 1
+                        break
+                    
+                print(it,'iterations shift (x,y):',round(shift_stk[1,l],3),round(shift_stk[0,l],3))
+                
+                for ss in range(pn):
+                    Mtrans = np.float32([[1,0,shift_stk[1,l]],[0,1,shift_stk[0,l]]])
+                    data[:,:,ss,l,scan]  = cv2.warpAffine(data[:,:,ss,l,scan].copy().astype(np.float32), Mtrans, data_size[::-1], flags=cv2.INTER_LANCZOS4)
+                
+                old_data[:,:,0,l]  = cv2.warpAffine(old_data[:,:,0,l].copy().astype(np.float32), Mtrans, (old_data.shape[0],old_data.shape[1]), flags=cv2.INTER_LANCZOS4)
+            
+            if repeat == 0: # no need to repeat
+                count_repeat = 0
+            
+            # if l == cwl:
+            #     ref = image_derivative(old_data[:,:,0,cpos_arr[0],scan])[sly,slx]
         
-        hdr_arr[scan]['CAL_WREG'] = 'y: '+str([round(shift_stk[0,i],3) for i in range(wln-1)]) + ', x: '+str([round(shift_stk[1,i],3) for i in range(wln-1)])
+            hdr_arr[scan]['CAL_WREG'] += 'y: '+str([round(shift_stk[0,i],3) for i in range(wln)]) + ', x: '+str([round(shift_stk[1,i],3) for i in range(wln)])
     
     del old_data
 
-    return data, hdr_arr
+    return data, hdr_arr    
+
+def average_registration(data, cpos_arr, sly, slx):
+    """Align the continuum, from the Stokes I image, of consecutive scans, using cv2.warpAffine and then average the scans
+
+    Parameters
+    ----------
+    data: ndarray
+        input data to be aligned in wavelength
+    cpos_arr: ndarray
+        array of continuum positions
+    sly: slice
+        slice in y direction
+    slx: slice
+        slice in x direction
     
+    Returns
+    -------
+    data: ndarray
+        data with average registration applied and then averaged
+    """
+    ref = data[sly,slx,0,cpos_arr[0],0].copy()
+    old_data = data.copy()
+    data_shape = data.shape
+
+    shift_raw = np.zeros((2,data_shape[-1]))
+
+    for scan in range(1,data_shape[-1]):
+    
+        temp = old_data[sly,slx,0,cpos_arr[scan],scan]
+        it = 0
+        s = [1,1]
+                
+        while np.any(np.abs(s)>.5e-2):#for it in range(iterations):
+            sr, sc, r = SPG_shifts_FFT(np.asarray([ref,temp]))
+            s = [sr[1],sc[1]]
+            shift_raw[:,scan] = [shift_raw[0,scan]+s[0],shift_raw[1,scan]+s[1]]
+            
+            temp = fft_shift(old_data[:,:,0,cpos_arr[scan],scan], shift_raw[:,scan])[sly,slx]
+            it += 1
+            if it ==10:
+                break
+        
+        print(it,'iterations shift (x,y):',round(shift_raw[1,scan],3),round(shift_raw[0,scan],3))
+        Mtrans = np.float32([[1,0,shift_raw[1,scan]],[0,1,shift_raw[0,scan]]])
+        for l in range(6):
+            for p in range(4):
+                data[:,:,p,l,scan]  = cv2.warpAffine(old_data[:,:,p,l,scan].astype(np.float32), Mtrans, data_shape[:2], flags=cv2.INTER_LANCZOS4)
+        
+    data = np.mean(data,axis=-1)[...,np.newaxis]
+
+    return data
 
 def create_intermediate_hdr(data, hdr_interm, history_str, file_name, **kwargs):
     """add basic keywords to the intermediate file header
@@ -1882,7 +2704,7 @@ def write_out_intermediate(data_int, hdr_interm, history_str, scan, root_scan_na
         hdu_list.writeto(out_dir + f'{suffix}_V{version}_{root_scan_name}.fits', overwrite=True)
 
         
-def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, TemperatureCorrection = False, TemperatureConstant = 36.46e-3, level = 'CAL2', version = 'V01', out_dir = None):   
+def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, TemperatureCorrection = True, TemperatureConstant = 40.1225e-3, level = 'CAL2', version = 'V01', out_dir = None):   
     # from sophi_hrt_pipe.processes import apply_field_stop, hot_pixel_mask
     PD, h = get_data(data_f,True,True,True)
     
@@ -1917,8 +2739,9 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         PD = (PD - D[np.newaxis,rows,cols])# / F[np.newaxis,:,:,0,5]
 
     if prefilter_f is not None:
-        prefilter, _ = load_fits(prefilter_f)
-        prefilter = prefilter[:,::-1]
+        if os.path.isfile(prefilter_f):
+            prefilter, _ = load_fits(prefilter_f)
+            prefilter = prefilter[:,::-1]
     
         tunning_constant = 0.0003513 # this shouldn't change
         # temperature_constant_new = 37.625e-3 # new and more accurate temperature constant
@@ -1931,9 +2754,11 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         else:
             wl = Volt * tunning_constant + ref_wavelength
         fakePD = np.zeros((data_size[0],data_size[1],4,nfocus,1)); fakePD[:,:,0,:,0] = np.moveaxis(PD.copy(),0,-1);
-        # voltagesData_arr = [np.asarray([Volt,Volt,Volt,Volt,Volt,Volt])]
         wlData_arr = [np.ones(nfocus)*wl]
-        fakePD = prefilter_correction(fakePD,wlData_arr,prefilter[rows,cols],None,TemperatureCorrection,TemperatureConstant)
+        if os.path.isfile(prefilter_f):
+            fakePD = prefilter_correction(fakePD,wlData_arr,prefilter[rows,cols],Tetalon=Tfg,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=None)
+        else:
+            fakePD = prefilter_correction_WLS(fakePD,wlData_arr,rows,cols,Tetalon=Tfg, prefilter_f=prefilter_f)
         PD = np.squeeze(np.moveaxis(fakePD[:,:,0,:,0],2,0))
         
     
@@ -1950,7 +2775,7 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         
         F = compare_IMGDIRX(F,True,'YES',header_flatdirx_exists,flatdirx_flipped)
         F = stokes_reshape(F)
-        wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = True,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)
+        wave_flat, voltagesData_flat, _, cpos_f = fits_get_sampling(flat_f,verbose = False,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)
 
         if norm_f:
             F = F/F[slice(1024-256,1024+256),slice(1024-256,1024+256)].mean(axis=(0,1))[np.newaxis,np.newaxis]
@@ -1958,8 +2783,11 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
             F = F/F[slice(0,2048),slice(0,2048)].mean(axis=(0,1))[np.newaxis,np.newaxis]
 
         if prefilter_f is not None:
-            F = prefilter_correction(F[...,np.newaxis],[wave_flat],prefilter,None,TemperatureCorrection,TemperatureConstant)[...,0]
-            
+            TFfg = hF['FGOV1PT1']
+            if os.path.isfile(prefilter_f):
+                F = prefilter_correction(F[...,np.newaxis],[wave_flat],prefilter,Tetalon=TFfg,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant,shift=None)[...,0]
+            else:
+                F = prefilter_correction_WLS(F[...,np.newaxis],[wave_flat],slice(0,2048),slice(0,2048),Tetalon=TFfg, prefilter_f=prefilter_f)[...,0]
         PD = PD / F[np.newaxis,rows,cols,0,cpos_f]
     
     field_stop_loc = os.path.realpath(__file__)
@@ -2023,97 +2851,14 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
         h.comments['NAXIS2'] = 'number of pixels on the y axis'
         
         with fits.open(data_f) as hdr:
-            hdr[0].data = PD
+            hdr[0].data = PD.astype('float32')
             hdr[0].header = h
             
             hdr.writeto(out_dir+name, overwrite=True)
     
     return PD
 
-def solarRotation(hdr):
-    # vrot from hathaway et al., 2011, values in deg/day
-    # proper vlos projection without thetarho ~ 0 approximation from Schuck et al., 2016
-    X = ccd2HGS(hdr)
-    HPCx, HPCy, HPCd = ccd2HPC(hdr)
-    thetarho = np.arctan(np.sqrt(np.cos(HPCy*u.arcsec)**2*np.sin(HPCx*u.arcsec)**2+np.sin(HPCy*u.arcsec)**2) / 
-                      (np.cos(HPCy*u.arcsec)*np.cos(HPCx*u.arcsec)))
-    psi = np.arctan(-(np.cos(HPCy*u.arcsec)*np.sin(HPCx*u.arcsec)) / np.sin(HPCy*u.arcsec))
-    psi[np.logical_and(HPCy>=0,HPCx<0)] += 0 * u.rad
-    psi[np.logical_and(HPCy<0,HPCx<0)] += np.pi * u.rad
-    psi[np.logical_and(HPCy<0,HPCx>=0)] += np.pi * u.rad
-    psi[np.logical_and(HPCy>=0,HPCx>=0)] += 2*np.pi * u.rad
-    
-    a = (14.437 * u.deg/u.day).to(u.rad/u.s); 
-    b = (-1.48 * u.deg/u.day).to(u.rad/u.s); 
-    c = (-2.99 * u.deg/u.day).to(u.rad/u.s); 
-    vrot = (a + b*np.sin(X[1]*u.deg)**2 + c*np.sin(X[1]*u.deg)**4)*np.cos(X[1]*u.deg)* hdr['RSUN_REF'] * u.m/u.rad
-    B0 = hdr['HGLT_OBS']*u.deg
-    THETA = (X[1])*u.deg # lat
-    PHI = (X[2]-hdr['HGLN_OBS'])*u.deg # lon
-    It = -np.cos(B0)*np.sin(PHI)*np.cos(thetarho) + \
-         (np.cos(PHI)*np.sin(psi)-np.sin(B0)*np.sin(PHI)*np.cos(psi))*np.sin(thetarho)
-    vlos = -(vrot) * It
-    
-    return vlos.value
-
-def SCVelocityResidual(hdr,wlcore):
-    # s/c velocity signal (considering line shift compensation)
-#     X = ccd2HGS(hdr)
-    HPCx, HPCy, HPCd = ccd2HPC(hdr)
-    thetarho = np.arctan(np.sqrt(np.cos(HPCy*u.arcsec)**2*np.sin(HPCx*u.arcsec)**2+np.sin(HPCy*u.arcsec)**2) / 
-                      (np.cos(HPCy*u.arcsec)*np.cos(HPCx*u.arcsec)))
-    psi = np.arctan(-(np.cos(HPCy*u.arcsec)*np.sin(HPCx*u.arcsec)) / np.sin(HPCy*u.arcsec))
-    psi[np.logical_and(HPCy>=0,HPCx<0)] += 0 * u.rad
-    psi[np.logical_and(HPCy<0,HPCx<0)] += np.pi * u.rad
-    psi[np.logical_and(HPCy<0,HPCx>=0)] += np.pi * u.rad
-    psi[np.logical_and(HPCy>=0,HPCx>=0)] += 2*np.pi * u.rad
-
-    vsc = hdr['OBS_VW']*np.sin(thetarho)*np.sin(psi) - hdr['OBS_VN']*np.sin(thetarho)*np.cos(psi) + hdr['OBS_VR']*np.cos(thetarho)
-    c = 299792.458
-    wlref = 6173.341
-    vsc_compensation = (wlcore-wlref)/wlref*c*1e3
-    
-    return vsc.value - vsc_compensation
-
-def meridionalFlow(hdr):
-    # from hathaway et al., 2011, values in m/s
-    # proper vlos projection without thetarho ~ 0 approximation from Schuck et al., 2016
-    X = ccd2HGS(hdr)
-    HPCx, HPCy, HPCd = ccd2HPC(hdr)
-    thetarho = np.arctan(np.sqrt(np.cos(HPCy*u.arcsec)**2*np.sin(HPCx*u.arcsec)**2+np.sin(HPCy*u.arcsec)**2) / 
-                      (np.cos(HPCy*u.arcsec)*np.cos(HPCx*u.arcsec)))
-    psi = np.arctan(-(np.cos(HPCy*u.arcsec)*np.sin(HPCx*u.arcsec)) / np.sin(HPCy*u.arcsec))
-    psi[np.logical_and(HPCy>=0,HPCx<0)] += 0 * u.rad
-    psi[np.logical_and(HPCy<0,HPCx<0)] += np.pi * u.rad
-    psi[np.logical_and(HPCy<0,HPCx>=0)] += np.pi * u.rad
-    psi[np.logical_and(HPCy>=0,HPCx>=0)] += 2*np.pi * u.rad
-    
-    d = 29.7 * u.m/u.s; e = -17.7 * u.m/u.s; 
-    vmer = (d*np.sin(X[1]*u.deg) + e*np.sin(X[1]*u.deg)**3)*np.cos(X[1]*u.deg)
-    B0 = hdr['HGLT_OBS']*u.deg
-    THETA = (X[1])*u.deg
-    PHI = (X[2]-hdr['HGLN_OBS'])*u.deg
-    It = (np.sin(B0)*np.cos(THETA) - np.cos(B0)*np.cos(PHI)*np.sin(THETA))*np.cos(thetarho) - \
-        (np.sin(PHI)*np.sin(THETA)*np.sin(psi) + \
-        (np.sin(B0)*np.cos(PHI)*np.sin(THETA) + np.cos(B0)*np.cos(THETA))*np.cos(psi))*np.sin(thetarho)
-    
-    vlos = (-vmer) * It
-    
-    return vlos.value
-
-def SCGravitationalRedshift(hdr):
-    # ok
-    # gravitational redshift (theoretical) from a distance dsun from the sun
-    dsun = hdr['DSUN_OBS'] # m
-    c = 299792.458e3 # m/s
-    Rsun = hdr['RSUN_REF'] # m
-    Msun = 1.9884099e30 # kg
-    G = 6.6743e-11 # m3/kg/s2
-    vg = G*Msun/c * (1/Rsun - 1/dsun)
-    
-    return vg
-
-def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True, TemperatureConstant = 36.46e-3,prefilter_f=None,solar_rotation=True):
+def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True, TemperatureConstant = 40.1225e-3,prefilter_f=None,solar_rotation=True):
     """
     Cavity Map computation from flat field.
     This function returns the Cavity errors in \AA at each polarimetric modulation.
@@ -2208,15 +2953,17 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True, T
 #         a = 2.894e-6 * u.rad/u.s; b = -0.428e-6 * u.rad/u.s; c = -0.370e-6 * u.rad/u.s; 
 #         vrot = (a + b*np.sin(X[1]*u.deg)**2 + c*np.sin(X[1]*u.deg)**4)*np.cos(X[1]*u.deg)* 695700000. * u.m/u.rad
 #         vlos = (vrot)*np.sin((X[2]-hdr['HGLN_OBS'])*u.deg)*np.cos(hdr['CRLT_OBS']*u.deg)
+        # update on 2025-02-24: added convective Blueshift
         
         vrot = solarRotation(hdr)
         vmer = meridionalFlow(hdr)
         vgr = SCGravitationalRedshift(hdr)
         vsc = SCVelocityResidual(hdr,wlcore)
+        vcb = convectiveBlueshift(hdr)
 
         c = 299792.458
         wlref = 6173.341
-        wlvlos = ((vrot+vmer+vgr+vsc)*1e-3*wlref/c)
+        wlvlos = ((vrot+vmer+vgr+vsc+vcb)*1e-3*wlref/c)
 
         return wlvlos
 
@@ -2238,7 +2985,7 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True, T
     if prefilter_f is not None:
         print("Prefilter correction")
         prefilter = fits.getdata(prefilter_f)[:,::-1]
-        flat = prefilter_correction(flat.copy()[...,np.newaxis],[wl],prefilter,TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)[...,0]
+        flat = prefilter_correction(flat.copy()[...,np.newaxis],[wl],prefilter,Tetalon=hh[0].header['FGOV1PT1'],TemperatureCorrection=TemperatureCorrection,TemperatureConstant=TemperatureConstant)[...,0]
     
     CM = np.zeros((4,flat.shape[0],flat.shape[1]))
     for p in range(4):
