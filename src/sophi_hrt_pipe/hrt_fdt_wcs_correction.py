@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore", category=sunpy.util.SunpyMetadataWarning)
 
 VERSION = '1.0.1'
 
-def closestFDT(filename):
+def closestFDT(filename, MAX_DAYS = 3):
     # hdr = fits.open(filename)
     # btype = hdr[0].header['BTYPE']
     LL_dates_corrupted = ['2024-03-17',
@@ -37,7 +37,6 @@ def closestFDT(filename):
 
     date_obs = DT.strptime(filename.split('_')[-3], '%Y%m%dT%H%M%S')
 
-    MAX_DAYS = 3
     delta_days = 1
     while delta_days <= MAX_DAYS:
         t0 = date_obs - TD(days=delta_days)
@@ -133,7 +132,7 @@ def limb_fixedR(img, hdr, field_stop, AR_mask):
     side, center, Rpix, sly, slx = limb_side_finder(img,hdr,verbose=False)
 
     s = 5
-    temp = img[s:-s,s:-s][AR_mask[s:-s,s:-s]>0].flatten()
+    temp = img[s:-s,s:-s][(AR_mask*field_stop)[s:-s,s:-s]>0].flatten()
     hi = np.histogram(temp,bins=np.linspace(-0.07,temp.max(),100)); del temp
     gres, cov = double_gaussian_fit(hi,False,True)
     
