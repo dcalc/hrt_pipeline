@@ -1251,15 +1251,15 @@ def extract_coefs(tobs,PD_f = '/data/slam/home/calchetti/hrt_pipeline/csv/PD_res
         print('Fitting the Z4, Z6, Z10, and Z11 coefficients at a distance of', round(tobs[1]*tobs[2],3), 'au from the Sun')
         exp_func = lambda x,a,b,c: a * np.exp(-b * x) + c
         if tobs[2] < 0:
-            fit_Z4=[4.31393472, 5.04119823, -0.08043414]
-            fit_Z6=[-0.10998819, 0.1875804]
-            fit_Z10=[0.01517192, -0.93187035, 0.70991049]
-            fit_Z11=[1.90409535, 5.79110494, 0.01167675]
+            fit_Z4=[4.22361406, 4.68098641, -0.11281216]
+            fit_Z6= [-0.56200936, 0.33617799]
+            fit_Z10=[0.892834, -1.53633235, 0.82124044]
+            fit_Z11=[1.91863253, 5.99221654, 0.03890447]
         else:
-            fit_Z4=[8.61550132, 8.31999155, 0.2631551 ]
-            fit_Z6=[-0.25876416, 0.18856071]
-            fit_Z10=[-0.62410732, 0.70570757]
-            fit_Z11=[1.7441684, 5.84182432, 0.0620181 ]
+            fit_Z4= [4.87035687, 5.37641925, 0.07660543]
+            fit_Z6=[0, 0.081] # only average value, see Fran email on 2026-06-08
+            fit_Z10=[-0.90073928, 0.8711834] # linear
+            fit_Z11=[3.24653169, 7.71601687, 0.09197906]
 
         Z4=exp_func(tobs[1],fit_Z4[0],fit_Z4[1],fit_Z4[2])
         Z6=np.poly1d(fit_Z6)(tobs[1])

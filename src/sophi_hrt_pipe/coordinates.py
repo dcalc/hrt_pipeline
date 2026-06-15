@@ -437,7 +437,10 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
             print('wrong HMI cadence, only 45 and 720 are accepted')
             return None
         
-        dltt = datetime.timedelta(seconds=ht['EAR_TDEL']) # difference in light travel time S/C-Earth
+        if 'EAR_TDEL' in ht:
+            dltt = datetime.timedelta(seconds=ht['EAR_TDEL']) # difference in light travel time S/C-Earth
+        else:
+            dltt = datetime.timedelta(seconds=((sunpy.coordinates.sun.earth_distance(time=ht['DATE-OBS']).to(u.m) - ht['DSUN_OBS']*u.m) / c).value)
 
         kwlist = ["T_REC","T_OBS","DATE-OBS","CADENCE","DSUN_OBS"]
         
@@ -451,9 +454,9 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
         iteration = 0
         while np.isnan(lt) and iteration < MAXITER:
             n += 2
-            hmi_type = ("ic", "Continuum")
+            hmi_type = ("ic", "continuum")
             if ht['BTYPE'] == 'BLOS':
-                hmi_type = ("m","Magnetogram")
+                hmi_type = ("m","magnetogram")
             elif ht['BTYPE'] == 'VLOS':
                 hmi_type = ("v"  ,"Dopplergram")
             
@@ -461,7 +464,7 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
             if local_drms:
                 show_info = 'show_info %s["%s"] key="%s" -iPA' 
                 # show_info = 'show_info %s["%s"] key="%s" -iPA' 
-                input_ds = "hmi.m_"+cad+"s"
+                input_ds = "hmi."+hmi_type[0]+"_"+cad+"s"
                 inRecs = (t_obs+dtai-dcad+dltt).strftime("%Y.%m.%d_%H:%M:%S")+"-"+(t_obs+dtai+dcad+dltt).strftime("%Y.%m.%d_%H:%M:%S")
                 kk = ""
                 for k in kwlist:
@@ -516,8 +519,8 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
             print('PHI DATE-AVG:',t_obs)
 
         if local_drms:
-            nameh = name_h['magnetogram']
-            del name_h['magnetogram']
+            nameh = name_h[hmi_type[1]]
+            # del name_h[hmi_type[1]]
             hmi_map = sunpy.map.Map(fits.getdata(nameh),fits.Header(name_h))
             cache_dir = 'None'
             hmi_name = 'None'
