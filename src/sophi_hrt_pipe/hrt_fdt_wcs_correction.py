@@ -2,8 +2,8 @@ import numpy as np
 from matplotlib import pyplot as plt
 from astropy.io import fits
 from .utils import find_nearest, printc, bcolors, image_derivative, get_descriptor
-from .coordinates import rotate_header, translate_header, center_coord, circular_mask, remap, fft_shift, image_register, Inv2, und
-from .processes import limb_side_finder, elliptical_mask, double_gaussian_fit
+from .coordinates import rotate_header, translate_header, center_coord, circular_mask, remap, fft_shift, image_register, Inv2, und, CLV
+from .processes import limb_side_finder, elliptical_mask, double_gaussian_fit, elliptical_mu_map, subROIconstrast
 # import argparse
 from datetime import datetime as DT
 from datetime import timedelta as TD
@@ -82,7 +82,7 @@ def closestFDT(filename, MAX_DAYS = 3):
 
     return fdt_filename, descriptor
 
-def limb_fixedR(img, hdr, field_stop, AR_mask):
+def limb_fixedR(img, hdr, field_stop, AR_mask, high_contrast= False):
     """Fits limb to the image using least squares method.
 
     Parameters
@@ -95,6 +95,8 @@ def limb_fixedR(img, hdr, field_stop, AR_mask):
         field stop array
     AR_mask : array
         AR mask array
+    high_contrast : bool, optional
+        if true it returns slices from the region with higher contrast instead of those from limb_side_finder, by default False
     
     Returns
     -------
@@ -171,7 +173,7 @@ def limb_fixedR(img, hdr, field_stop, AR_mask):
             count += 1
         yi = new_yi
 
-    # max gradient along small vertical cuts
+    # max gradient along small horizontal cuts
     elif 'E' in side or 'W' in side:
         # print('E or W')
         yi,ar = np.unique(yi,return_index=True)
@@ -194,7 +196,21 @@ def limb_fixedR(img, hdr, field_stop, AR_mask):
     mask98 = elliptical_mask(img.shape,[p.x[0]*.98,p.x[1]*.98,p.x[2],p.x[3],p.x[4]])
     mask96 = elliptical_mask(img.shape,[p.x[0]*.96,p.x[1]*.96,p.x[2],p.x[3],p.x[4]])
     
-    return {'mask100':mask100,'mask96':mask96,'hi':hi,'gres':gres,'thr':thr,'xx':xx,'limb_mask':limb_mask,'limb_edge':limb_edge,'yi':yi,'xi':xi,'p':p}
+    if high_contrast:
+        # if hdr['DSUN_AU'] < 0.4:
+        #     windowSize = 384
+        # else:
+        windowSize = int(256//hdr['NBIN1'])
+        # clv = CLV(muSO_map(hdr,img.shape))
+        clv = CLV(elliptical_mu_map(img.shape,p.x))
+        contrast256 = subROIconstrast(img.copy()/clv, (field_stop*mask98)>0, windowSize, windowSize)
+        # contrast256 = subROIconstrast(img.copy(), (field_stop*mask98)>0, windowSize, windowSize)
+        i,j = np.unravel_index(np.argmax(contrast256),contrast256.shape)
+        sly,slx = slice(i-windowSize,i+windowSize), slice(j-windowSize,j+windowSize)
+        print('\nHigh contrast slices: ',sly,slx,'\n')
+    
+
+    return {'mask100':mask100,'mask96':mask96,'hi':hi,'gres':gres,'thr':thr,'xx':xx,'limb_mask':limb_mask,'limb_edge':limb_edge,'yi':yi,'xi':xi,'p':p,'sly':sly,'slx':slx, 'side':side}
     
 def correct_wcs_with_limb(img, hdr, field_stop, AR_mask, crota_manual_correction=0.15):
     good = False

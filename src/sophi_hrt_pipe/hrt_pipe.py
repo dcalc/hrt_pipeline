@@ -14,7 +14,7 @@ from .processes import setup_header, apply_dark_correction, load_and_process_fla
 
 from .inversions import generate_l2, create_output_filenames, CE_output
 from .coordinates import muSO_map, ccd2HGS
-from .hrt_fdt_wcs_correction import run_FDT_correction, correct_wcs_with_limb
+from .hrt_fdt_wcs_correction import run_FDT_correction, correct_wcs_with_limb, limb_fixedR
 from .hrt_hmi_wcs_correction import run_HMI_correction
 
 from .PSF import fran_restore
@@ -806,11 +806,11 @@ def phihrt_pipe(input_json_file):
             try:
                 AR_temp = ARmasking(data[...,scan], field_stop[rows,cols], cpos = cpos_arr[scan], net = True) # for ellipse limb fit
                 if iss_off: # no need to re-run the high contrast ROI search
-                    limb_temp, _, _, side, limb_percent_temp, ellipse_fit = limb_ellipse(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],AR_temp,percent=True,high_contrast=False,fit_results=True)
+                    limb_out = limb_fixedR(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],AR_temp, False)
+                    limb_temp, side, limb_percent_temp, ellipse_fit = limb_out['mask100'], limb_out['side'], limb_out['mask96'], limb_out['p']
                 else:
-                    limb_temp, sly, slx, side, limb_percent_temp, ellipse_fit = limb_ellipse(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],AR_temp,percent=True,high_contrast=True,fit_results=True)
-                
-                # limb_temp, sly, slx, side, limb_percent_temp = limb_fitting(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],percent=True)
+                    limb_out = limb_fixedR(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],AR_temp, True)
+                    limb_temp, sly, slx, side, limb_percent_temp, ellipse_fit = limb_out['mask100'], limb_out['sly'], limb_out['slx'], limb_out['side'], limb_out['mask96'], limb_out['p']
                 
                 if limb_temp is not None:
                     #get region of pixels for norm, which are for certain on disc
