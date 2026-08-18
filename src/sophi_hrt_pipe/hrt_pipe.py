@@ -737,7 +737,7 @@ def phihrt_pipe(input_json_file):
 
         # added here to have the high contrast slices
         # AR_temp = ARmasking(demod_hrt(data[...,0].copy(),pmp_temp,False)[0], field_stop[rows,cols], cpos = cpos_arr[0]) # for ellipse limb fit
-        _, sly, slx, _ = limb_ellipse(data[:,:,0,cpos_arr[0],0], hdr_arr[0],field_stop[rows,cols],field_stop[rows,cols],high_contrast=True)
+        _, sly, slx, _ = limb_ellipse(data[:,:,0,cpos_arr[0],0], hdr_arr[0],field_stop[rows,cols],field_stop[rows,cols],closure=0,high_contrast=True)
         
         # del AR_temp
         ####
