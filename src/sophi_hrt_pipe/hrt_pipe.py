@@ -737,7 +737,7 @@ def phihrt_pipe(input_json_file):
 
         # added here to have the high contrast slices
         # AR_temp = ARmasking(demod_hrt(data[...,0].copy(),pmp_temp,False)[0], field_stop[rows,cols], cpos = cpos_arr[0]) # for ellipse limb fit
-        _, sly, slx, _ = limb_ellipse(data[:,:,0,cpos_arr[0],0], hdr_arr[0],field_stop[rows,cols],field_stop[rows,cols],high_contrast=True)
+        _, sly, slx, _ = limb_ellipse(data[:,:,0,cpos_arr[0],0], hdr_arr[0],field_stop[rows,cols],field_stop[rows,cols],closure=0,high_contrast=True)
         
         # del AR_temp
         ####
@@ -806,9 +806,9 @@ def phihrt_pipe(input_json_file):
             try:
                 AR_temp = ARmasking(data[...,scan], field_stop[rows,cols], cpos = cpos_arr[scan], net = True) # for ellipse limb fit
                 if iss_off: # no need to re-run the high contrast ROI search
-                    limb_temp, _, _, side, limb_percent_temp, ellipse_fit = limb_ellipse(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],AR_temp,percent=True,high_contrast=False,fit_results=True)
+                    limb_temp, _, _, side, limb_percent_temp, ellipse_fit = limb_ellipse(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],AR_temp,percent=True,high_contrast=False,fit_results=True, closure = 0)
                 else:
-                    limb_temp, sly, slx, side, limb_percent_temp, ellipse_fit = limb_ellipse(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],AR_temp,percent=True,high_contrast=True,fit_results=True)
+                    limb_temp, sly, slx, side, limb_percent_temp, ellipse_fit = limb_ellipse(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],AR_temp,percent=True,high_contrast=True,fit_results=True, closure = 0)
                 
                 # limb_temp, sly, slx, side, limb_percent_temp = limb_fitting(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],percent=True)
                 

@@ -1115,6 +1115,8 @@ def image_derivative(d):
     SY = sps.convolve(d, ky,mode='same')
 
     A=SX**2+SY**2
+    # remove high contrast edges
+    A[0,:] = 0; A[-1,:] = 0; A[:,0] = 0; A[:,-1] = 0
 
     return A
 

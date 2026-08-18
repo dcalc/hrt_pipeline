@@ -2108,7 +2108,7 @@ def subROIconstrast(img, img_mask, windowSize, windowSeparation):
             
     return contrast
 
-def limb_ellipse(img, hdr, field_stop, AR_mask, verbose=True, percent=False, fit_results=False, high_contrast = True, debug=False):
+def limb_ellipse(img, hdr, field_stop, AR_mask, closure=20, verbose=True, percent=False, fit_results=False, high_contrast = True, debug=False):
     """Fits limb to the image using least squares method.
 
     Parameters
@@ -2119,6 +2119,10 @@ def limb_ellipse(img, hdr, field_stop, AR_mask, verbose=True, percent=False, fit
         header of fits file
     field_stop : array
         field stop array
+    AR_mask : array
+        AR mask array used to mask out the AR from the gradient
+    closure : int
+        value used for the closure procedure in the limb mask to remove possible umbral signals, by default 20 px
     verbose : bool, optional
         Print limb fitting results, by default True
     percent : bool, optional
@@ -2207,13 +2211,31 @@ def limb_ellipse(img, hdr, field_stop, AR_mask, verbose=True, percent=False, fit
     
     # dilation and erosion to remove any possible zeros coming from umbrae
     # border_value=1 in erosion to avoid black edges
-    limb_mask = binary_erosion(binary_dilation(limb_mask,[[0,1,0],[1,1,1],[0,1,0]],iterations=20),[[0,1,0],[1,1,1],[0,1,0]],iterations=20,border_value=1)
-    
-    # erosion of field stop to avoid edges from there
-    limb_edge = image_derivative(limb_mask)*binary_erosion(field_stop[s:-s,s:-s],[[0,1,0],[1,1,1],[0,1,0]],iterations=5)
+    # run onlfy if closure is greater than 0
+    if closure:
+        limb_mask = binary_erosion(binary_dilation(limb_mask,[[0,1,0],[1,1,1],[0,1,0]],iterations=closure),[[0,1,0],[1,1,1],[0,1,0]],iterations=closure,border_value=1)
+
+    # erosion of field stop and AR_mask to avoid edges from there (only if field stop in FoV)
+    if np.sum(field_stop[s:-s,s:-s] == 0) > 0:
+        limb_edge = image_derivative(limb_mask)*binary_erosion(field_stop[s:-s,s:-s],[[0,1,0],[1,1,1],[0,1,0]],iterations=5)*binary_erosion(AR_mask[s:-s,s:-s],[[0,1,0],[1,1,1],[0,1,0]],iterations=5)
+    else:
+        limb_edge = image_derivative(limb_mask)*field_stop[s:-s,s:-s]*AR_mask[s:-s,s:-s]
+
     yi, xi = np.where(limb_edge>0.9)
 
-    p = least_squares(_residuals,x0 = [Rpix,Rpix,center[0],center[1],0], args=(xi,yi),
+    if np.size(yi) < 5:
+        printc('Despite the WCS and the thresholding, the limb might be too close to the edge of the FoV, so the limb fitting cannot be run.',bcolors.WARNING)
+        output = [None,sly,slx,'']
+        if debug:
+            return {'hi':hi,'gres':gres,'cov':cov,'center':center,'Rpix':Rpix,'hi':hi,'gres':gres,'thr':thr,'xx':xx,'limb_mask':limb_mask,'limb_edge':limb_edge}
+        if percent:
+            output += [None]
+        if fit_results:
+            output += [None]
+
+        return output
+
+    p = least_squares(_residuals,x0 = [Rpix,Rpix,center[0],center[1],0], args=(xi+s,yi+s),
                               bounds = ([Rpix-100,Rpix-100,center[0]-300,center[1]-300,-np.pi/2],[Rpix+100,Rpix+100,center[0]+300,center[1]+300,np.pi/2]))
 
     mask100 = elliptical_mask(img.shape,p.x)
