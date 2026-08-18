@@ -806,10 +806,10 @@ def phihrt_pipe(input_json_file):
             try:
                 AR_temp = ARmasking(data[...,scan], field_stop[rows,cols], cpos = cpos_arr[scan], net = True) # for ellipse limb fit
                 if iss_off: # no need to re-run the high contrast ROI search
-                    limb_out = limb_fixedR(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],AR_temp, False)
+                    limb_out = limb_fixedR(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],AR_temp, 0, False)
                     limb_temp, side, limb_percent_temp, ellipse_fit = limb_out['mask100'], limb_out['side'], limb_out['mask96'], limb_out['p']
                 else:
-                    limb_out = limb_fixedR(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],AR_temp, True)
+                    limb_out = limb_fixedR(data[:,:,0,cpos_arr[0],int(scan)], hdr_arr[int(scan)],field_stop[rows,cols],AR_temp, 0, True)
                     limb_temp, sly, slx, side, limb_percent_temp, ellipse_fit = limb_out['mask100'], limb_out['sly'], limb_out['slx'], limb_out['side'], limb_out['mask96'], limb_out['p']
                 
                 if limb_temp is not None:
@@ -1216,7 +1216,7 @@ def phihrt_pipe(input_json_file):
             htemp = hdr_arr[scan].copy()
             if limb_temp is not None:
                 printc('-->>>>>>> Running WCS correction with limb fitting',bcolors.OKGREEN)
-                hdr_arr[scan], good = correct_wcs_with_limb(data[:,:,0,cpos_arr[0],scan], htemp, field_stop[rows,cols], AR_mask[:,:,scan], 0.15)
+                hdr_arr[scan], good = correct_wcs_with_limb(data[:,:,0,cpos_arr[0],scan], htemp, field_stop[rows,cols], AR_mask[:,:,scan], 0, 0.15)
                 if good:
                     add_history = 'WCS updated by HRT pipeline using a more precise limb fitting. Check parent file for old WCS'
                     hdr_arr[scan]['CAL_WCS'] = True

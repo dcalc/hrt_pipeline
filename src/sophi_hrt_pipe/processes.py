@@ -2223,7 +2223,7 @@ def limb_ellipse(img, hdr, field_stop, AR_mask, closure=20, verbose=True, percen
 
     yi, xi = np.where(limb_edge>0.9)
 
-    if np.size(yi) < 5:
+    if np.size(yi) <= 40:
         printc('Despite the WCS and the thresholding, the limb might be too close to the edge of the FoV, so the limb fitting cannot be run.',bcolors.WARNING)
         output = [None,sly,slx,'']
         if debug:

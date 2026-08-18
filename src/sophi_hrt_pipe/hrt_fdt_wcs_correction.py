@@ -82,7 +82,7 @@ def closestFDT(filename, MAX_DAYS = 3):
 
     return fdt_filename, descriptor
 
-def limb_fixedR(img, hdr, field_stop, AR_mask, high_contrast= False):
+def limb_fixedR(img, hdr, field_stop, AR_mask, closure = 20, high_contrast= False):
     """Fits limb to the image using least squares method.
 
     Parameters
@@ -95,6 +95,8 @@ def limb_fixedR(img, hdr, field_stop, AR_mask, high_contrast= False):
         field stop array
     AR_mask : array
         AR mask array
+    closure : int, optional
+        value used for the closure procedure in the limb mask to remove possible umbral signals, by default 20 px
     high_contrast : bool, optional
         if true it returns slices from the region with higher contrast instead of those from limb_side_finder, by default False
     
@@ -135,13 +137,13 @@ def limb_fixedR(img, hdr, field_stop, AR_mask, high_contrast= False):
 
     s = 5
     temp = img[s:-s,s:-s][(AR_mask*field_stop)[s:-s,s:-s]>0].flatten()
-    hi = np.histogram(temp,bins=np.linspace(-0.07,temp.max(),100)); del temp
+    hi = np.histogram(temp,bins=np.linspace(-temp.max()/50,temp.max(),100)); del temp
     gres, cov = double_gaussian_fit(hi,False,True)
     
     if (np.any((np.sqrt(np.diagonal(cov))/gres)[:3] > 100) or np.any(np.isnan(cov))) or gres[1] > gres[4]*0.7: # sometimes south pole limb is not found, so extra condition on fit
         printc('Despite the WCS, it looks like the Limb is not in the FoV',bcolors.WARNING)
         
-        return {'hi':hi,'gres':gres,'cov':cov,'center':center,'Rpix':Rpix}
+        return {'hi':hi,'gres':gres,'cov':cov,'center':center,'Rpix':Rpix,'mask100':None,'mask96':None,'side':side,'p':None}
 
     xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
     thr = xx[find_nearest(xx,min(gres[1],gres[4]))+np.argmin(hi[0][find_nearest(xx,min(gres[1],gres[4])):find_nearest(xx,max(gres[1],gres[4]))])]
@@ -150,12 +152,23 @@ def limb_fixedR(img, hdr, field_stop, AR_mask, high_contrast= False):
     
     # dilation and erosion to remove any possible zeros coming from umbrae
     # border_value=1 in erosion to avoid black edges
-    limb_mask = binary_erosion(binary_dilation(limb_mask,[[0,1,0],[1,1,1],[0,1,0]],iterations=20),[[0,1,0],[1,1,1],[0,1,0]],iterations=20,border_value=1)
+    if closure:
+        limb_mask = binary_erosion(binary_dilation(limb_mask,[[0,1,0],[1,1,1],[0,1,0]],iterations=closure),[[0,1,0],[1,1,1],[0,1,0]],iterations=closure,border_value=1)
     
     # erosion of field stop and AR_mask to avoid edges from there
-    limb_edge = image_derivative(limb_mask)*binary_erosion(field_stop,[[0,1,0],[1,1,1],[0,1,0]],iterations=20)[s:-s,s:-s]\
-                                           *binary_erosion(AR_mask,[[0,1,0],[1,1,1],[0,1,0]],iterations=20)[s:-s,s:-s]
+    # erosion of field stop and AR_mask to avoid edges from there (only if field stop in FoV)
+    if np.sum(field_stop[s:-s,s:-s] == 0) > 0:
+        limb_edge = image_derivative(limb_mask)*binary_erosion(field_stop[s:-s,s:-s],[[0,1,0],[1,1,1],[0,1,0]],iterations=5)*binary_erosion(AR_mask[s:-s,s:-s],[[0,1,0],[1,1,1],[0,1,0]],iterations=5)
+    else:
+        limb_edge = image_derivative(limb_mask)*field_stop[s:-s,s:-s]*AR_mask[s:-s,s:-s]
+    
     yi, xi = np.where(limb_edge>0.9)
+
+    if np.size(yi) <= 40:
+        printc('Despite the WCS and the thresholding, the limb might be too close to the edge of the FoV, so the limb fitting cannot be run.',bcolors.WARNING)
+        output = [None,sly,slx,'']
+        return {'hi':hi,'gres':gres,'cov':cov,'center':center,'Rpix':Rpix,'hi':hi,'gres':gres,'thr':thr,'xx':xx,'limb_mask':limb_mask,'limb_edge':limb_edge,'mask100':None,'mask96':None,'side':side,'p':None}
+
     yi += s; xi += s;
     # max gradient along small vertical cuts
     if 'N' in side or 'S' in side:
@@ -168,7 +181,7 @@ def limb_fixedR(img, hdr, field_stop, AR_mask, high_contrast= False):
         new_yi = yi-delta
         count = 0
         for x0,y0 in zip(xi,yi):
-            cut[:,x0] = img_der[y0-delta:y0+delta,x0]
+            cut[:,x0] = np.pad(img_der[max(y0-delta,s):min(y0+delta,img.shape[0]-s),x0],(abs(min(y0-delta-s,0)),max(y0+delta-(img.shape[0]-s),0)))
             new_yi[count] += cut[:,x0].argmax()
             count += 1
         yi = new_yi
@@ -184,7 +197,7 @@ def limb_fixedR(img, hdr, field_stop, AR_mask, high_contrast= False):
         new_xi = xi-delta
         count = 0
         for x0,y0 in zip(xi,yi):
-            cut[y0] = img_der[y0,x0-delta:x0+delta]
+            cut[y0] = np.pad(img_der[y0,max(x0-delta,s):min(x0+delta,img.shape[1]-s)],(abs(min(x0-delta-s,0)),max(x0+delta-(img.shape[1]-s),0)))
             new_xi[count] += cut[y0].argmax()
             count += 1
         xi = new_xi
@@ -212,10 +225,10 @@ def limb_fixedR(img, hdr, field_stop, AR_mask, high_contrast= False):
 
     return {'mask100':mask100,'mask96':mask96,'hi':hi,'gres':gres,'thr':thr,'xx':xx,'limb_mask':limb_mask,'limb_edge':limb_edge,'yi':yi,'xi':xi,'p':p,'sly':sly,'slx':slx, 'side':side}
     
-def correct_wcs_with_limb(img, hdr, field_stop, AR_mask, crota_manual_correction=0.15):
+def correct_wcs_with_limb(img, hdr, field_stop, AR_mask, crota_manual_correction=0.15, closure=0):
     good = False
     try:
-        out = limb_fixedR(img, hdr, field_stop, AR_mask)
+        out = limb_fixedR(img, hdr, field_stop, AR_mask, closure)
         p = out['p'].x.copy()
         h_hrt = rotate_header(hdr.copy(),-crota_manual_correction, center=[p[2],p[3]])
         center = center_coord(h_hrt)
