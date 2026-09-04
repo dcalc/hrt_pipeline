@@ -1234,6 +1234,7 @@ def phihrt_pipe(input_json_file):
                 
                 elif wcs_update.lower() == 'hmi':
                     hmi_lim= (-89,89)
+                    htemp['BTYPE'] = 'BLOS' # otherwise it will try to download the HMI continuum
                     centerFoV = ccd2HGS(htemp, np.array([[htemp['NAXIS1']//2, htemp['NAXIS2']//2],
                                             [htemp['NAXIS1']//2, 0],
                                             [htemp['NAXIS1']//2, htemp['NAXIS2']-1],
