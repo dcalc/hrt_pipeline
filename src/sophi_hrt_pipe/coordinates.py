@@ -508,14 +508,14 @@ def downloadClosestHMI(ht,t_obs,jsoc_email,verbose=False,path=False,cad='45',hmi
         else:
             name_h = 'hmi.'+hmi_type[0]+'_'+cad+'s['+keys['T_REC'][ind]+']{'+hmi_type[1]+'}'
 
-        if np.abs((datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds()) > np.ceil(int(cad)/2):
+        if np.abs((datetime.datetime.strptime(keys['T_REC'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt - t_obs).total_seconds()) > np.ceil(int(cad)/2):
             print('WARNING: Closer file exists but has not been found.')
             print(name_h)
-            print('T_OBS:',datetime.datetime.strptime(keys['T_OBS'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
+            print('T_REC:',datetime.datetime.strptime(keys['T_REC'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
             print('DATE-AVG:',t_obs)
             print('')
         else:
-            print('HMI T_OBS (corrected for TAI and Light travel time):',datetime.datetime.strptime(keys['T_REC'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
+            print('HMI T_REC (corrected for TAI and Light travel time):',datetime.datetime.strptime(keys['T_REC'][ind],'%Y.%m.%d_%H:%M:%S_TAI') - dtai - dltt)
             print('PHI DATE-AVG:',t_obs)
 
         if local_drms:
