@@ -1251,6 +1251,7 @@ def phihrt_pipe(input_json_file):
                         except Exception as e:
                             printc(f"Error while correcting with HMI. The code will continue.\nThis was the error: {e}",bcolors.FAIL)
                             new_wcs = {'CROTA':[None]}
+                            wcs_warning_message = '-->>>>>>> Running FDT WCS correction on the BLOS file because the correction failed'
                     else:
                         new_wcs = {'CROTA':[None]}
                         wcs_warning_message = '-->>>>>>> Running FDT WCS correction on the BLOS file because the longitude is {:.2f} deg'.format(point)
