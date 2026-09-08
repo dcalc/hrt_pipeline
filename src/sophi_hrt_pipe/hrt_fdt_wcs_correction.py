@@ -143,7 +143,7 @@ def limb_fixedR(img, hdr, field_stop, AR_mask, closure = 20, high_contrast= Fals
     if (np.any((np.sqrt(np.diagonal(cov))/gres)[:3] > 100) or np.any(np.isnan(cov))) or gres[1] > gres[4]*0.7: # sometimes south pole limb is not found, so extra condition on fit
         printc('Despite the WCS, it looks like the Limb is not in the FoV',bcolors.WARNING)
         
-        return {'hi':hi,'gres':gres,'cov':cov,'center':center,'Rpix':Rpix,'mask100':None,'mask96':None,'side':side,'p':None}
+        return {'hi':hi,'gres':gres,'cov':cov,'center':center,'Rpix':Rpix,'mask100':None,'mask96':None,'sly':sly,'slx':slx,'side':side,'p':None}
 
     xx=hi[1][:-1] + (hi[1][1]-hi[1][0])/2
     thr = xx[find_nearest(xx,min(gres[1],gres[4]))+np.argmin(hi[0][find_nearest(xx,min(gres[1],gres[4])):find_nearest(xx,max(gres[1],gres[4]))])]
@@ -167,7 +167,7 @@ def limb_fixedR(img, hdr, field_stop, AR_mask, closure = 20, high_contrast= Fals
     if np.size(yi) <= 40:
         printc('Despite the WCS and the thresholding, the limb might be too close to the edge of the FoV, so the limb fitting cannot be run.',bcolors.WARNING)
         output = [None,sly,slx,'']
-        return {'hi':hi,'gres':gres,'cov':cov,'center':center,'Rpix':Rpix,'hi':hi,'gres':gres,'thr':thr,'xx':xx,'limb_mask':limb_mask,'limb_edge':limb_edge,'mask100':None,'mask96':None,'side':side,'p':None}
+        return {'hi':hi,'gres':gres,'cov':cov,'center':center,'Rpix':Rpix,'hi':hi,'gres':gres,'thr':thr,'xx':xx,'limb_mask':limb_mask,'limb_edge':limb_edge,'mask100':None,'mask96':None,'sly':sly,'slx':slx,'side':side,'p':None}
 
     yi += s; xi += s;
     # max gradient along small vertical cuts
