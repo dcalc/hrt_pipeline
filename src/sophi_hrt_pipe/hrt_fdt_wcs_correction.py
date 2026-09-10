@@ -133,7 +133,7 @@ def limb_fixedR(img, hdr, field_stop, AR_mask, closure = 20, high_contrast= Fals
     from scipy.optimize import least_squares
     from scipy.ndimage import binary_erosion, binary_dilation
 
-    side, center, Rpix, sly, slx = limb_side_finder(img,hdr,verbose=False)
+    side, center, Rpix, sly, slx = limb_side_finder(img,hdr,verbose=True)
 
     s = 5
     temp = img[s:-s,s:-s][(AR_mask*field_stop)[s:-s,s:-s]>0].flatten()
@@ -141,7 +141,9 @@ def limb_fixedR(img, hdr, field_stop, AR_mask, closure = 20, high_contrast= Fals
     gres, cov = double_gaussian_fit(hi,False,True)
     
     if (np.any((np.sqrt(np.diagonal(cov))/gres)[:3] > 100) or np.any(np.isnan(cov))) or gres[1] > gres[4]*0.7: # sometimes south pole limb is not found, so extra condition on fit
-        printc('Despite the WCS, it looks like the Limb is not in the FoV',bcolors.WARNING)
+        # cov is all nan if low value histogram is empty
+        if not np.all(np.isnan(cov)):
+            printc('Despite the WCS, it looks like the Limb is not in the FoV',bcolors.WARNING)
         
         return {'hi':hi,'gres':gres,'cov':cov,'center':center,'Rpix':Rpix,'mask100':None,'mask96':None,'sly':sly,'slx':slx,'side':side,'p':None}
 

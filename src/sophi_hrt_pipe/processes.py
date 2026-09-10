@@ -1069,7 +1069,7 @@ def crosstalk_2D_ItoQUV(data: np.ndarray,
     """
     crosstalk_ItoQUV calculates the cross-talk from Stokes $I$ to Stokes $Q$, $U$, and $V$.
 
-    The procedure works as follow: (see Sanchez Almeida, J. \& Lites, B.~W.\ 1992, \apj, 398, 359. doi:10.1086/171861)
+    The procedure works as follow: (see Sanchez Almeida, J. and Lites, B.~W. 1992, apj, 398, 359. doi:10.1086/171861)
 
 
     :param input_data: input data. Dimensions should be `[Stokes, wavelength, ydim,xdim]`
@@ -1078,9 +1078,9 @@ def crosstalk_2D_ItoQUV(data: np.ndarray,
     :type verbose: bool, optional
     :param mask: mask for selecting the image area for cross-talk correction dimension = `[ydim,xdim]´, defaults to 0
     :type mask: np.ndarray, optional
-    :param threshold: threshold for considering signals in the cross-talk calculation. :math:`p = \sqrt(Q^2 + U^2 = V^2) < threshold`. Given in percent, defaults to 0.5 %
+    :param threshold: threshold for considering signals in the cross-talk calculation. :math:`p = sqrt(Q^2 + U^2 = V^2) < threshold`. Given in percent, defaults to 0.5 %
     :type threshold: float, optional
-    :param lower_threshold: lower threshold for considering signals in the cross-talk calculation. :math:`I(\\lambda) > lower_threshold`. Given in percent, defaults to 40 %
+    :param lower_threshold: lower threshold for considering signals in the cross-talk calculation. :math:`I(lambda) > lower_threshold`. Given in percent, defaults to 40 %
     :type lower_threshold: float, optional
     :param norma: Data normalization value, defaults to 1.0
     :type norma: float, optional
@@ -1944,15 +1944,27 @@ def double_gaussian_fit(a,show=True,covariance=False,partial=4):
     # p0 = np.ones(6)
     xx1 = xx[:xx.size//partial]; xx2 = xx[xx.size//partial:]
     y1 = y[:y.size//partial]; y2 = y[y.size//partial:]
-    p0=[max(y1),sum(xx1*y1)/sum(y1),np.sqrt(sum(y1 * (xx1 - sum(xx1*y1)/sum(y1))**2) / sum(y1)),max(y2),sum(xx2*y2)/sum(y2),np.sqrt(sum(y2 * (xx2 - sum(xx2*y2)/sum(y2))**2) / sum(y2))] #weighted avg of bins for avg and sigma inital values
-    # p0[0]=y1[find_nearest(xx1,p0[1])-5:find_nearest(xx1,p0[1])+5].mean() #find init guess for ampltiude of gauss func
-    # p0[3]=y2[find_nearest(xx2,p0[1])-5:find_nearest(xx2,p0[1])+5].mean() #find init guess for ampltiude of gauss func
-    
+    # if y1 is empty (all 0), avoid nan by setting value to 0
+    p0=[
+        max(y1),
+        0 if not sum(y1) else sum(xx1*y1)/sum(y1),
+        0 if not sum(y1) else np.sqrt(sum(y1 * (xx1 - sum(xx1*y1)/sum(y1))**2) / sum(y1))
+        ,max(y2),
+        0 if not sum(y2) else sum(xx2*y2)/sum(y2),
+        0 if not sum(y2) else np.sqrt(sum(y2 * (xx2 - sum(xx2*y2)/sum(y2))**2) / sum(y2))
+    ]
+
+    if sum(y1) == 0:
+        printc("Low values histogram is empty. Returning initial values and nan covariance",color=bcolors.WARNING)
+        if covariance:
+            return p0, np.ones((6,6)) * np.nan
+        else:
+            return p0
     try:
         bounds = ([0,xx1.min(),-xx1.max(),0,xx2.min(),-xx1.max()],[y1.sum(),xx1.max(),xx1.max(),y2.sum(),xx2.max(),xx1.max()])
         p,cov=spo.curve_fit(double_gaus,xx,y,p0=p0,bounds=bounds)
         if show:
-            lbl = '{:.2e} $\pm$ {:.2e}\n{:.2e} $\pm$ {:.2e}'.format(p[1],p[2],p[4],p[5])
+            lbl = r'{:.2e} $\pm$ {:.2e}\n{:.2e} $\pm$ {:.2e}'.format(p[1],p[2],p[4],p[5])
             plt.plot(xx,double_gaus(xx,*p),'r--', label=lbl)
             plt.legend(fontsize=9)
         if covariance:
@@ -1962,8 +1974,7 @@ def double_gaussian_fit(a,show=True,covariance=False,partial=4):
     except:
         printc("Gaussian fit failed: return initial guess",color=bcolors.WARNING)
         if covariance:
-            cov = np.zeros((len(p0),len(p0))); cov[:] = np.nan
-            return p0, cov
+            return p0, np.ones((6,6)) * np.nan
         else:
             return p0
     
@@ -2883,7 +2894,7 @@ def PDProcessing(data_f, flat_f, dark_f, norm_f = True, prefilter_f = None, Temp
 def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True, TemperatureConstant = 40.1225e-3,prefilter_f=None,solar_rotation=True):
     """
     Cavity Map computation from flat field.
-    This function returns the Cavity errors in \AA at each polarimetric modulation.
+    This function returns the Cavity errors in Angstrom at each polarimetric modulation.
     It requires multiprocess package
     
     INPUT
@@ -2896,7 +2907,7 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True, T
     solar_rotation (bool): if True, Doppler shift due to solar rotation is removed from the cavity (Default: True)
     
     OUTPUT
-    CM (array): Cavity Map array. Units are \AA. Shape: (4,2048,2048)
+    CM (array): Cavity Map array. Units are Angstrom. Shape: (4,2048,2048)
     """
     
     def gausfit_1profile(profile, x, center=False, out_value=0, show=False, weight=True):
@@ -3031,7 +3042,7 @@ def CavityMapComputation(filen,out_name=None,nc=32,TemperatureCorrection=True, T
             hdr[0].header['SUBJECT'] = 'CAVITY MAP'
             hdr[0].header['LEVEL'] = 'CAL'
             hdr[0].header['BTYPE'] = 'Wavelength Shift'
-            hdr[0].header['BUNIT'] = '\AA'
+            hdr[0].header['BUNIT'] = r'\AA'
             hdr[0].header['DATE'] = ntime.strftime("%Y-%m-%dT%H:%M:%S")
             hdr[0].header['FILENAME'] = out_name.split('/')[-1]
 
