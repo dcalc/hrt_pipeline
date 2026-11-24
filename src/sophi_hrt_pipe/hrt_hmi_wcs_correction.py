@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot as plt
 from astropy.io import fits
-from .utils import find_nearest, printc, bcolors, get_descriptor
+from .utils import find_nearest, printc, bcolors, get_descriptor, fits_get_sampling
 from .coordinates import rotate_header, translate_header, center_coord, circular_mask, remap, fft_shift, image_register, Inv2, und, downloadClosestHMI
 from .processes import limb_side_finder, elliptical_mask
 # import argparse
@@ -36,7 +36,7 @@ def prepare_data(hrt_file, hmi_map, crota_manual_correction=0.15, undistortion=F
     
     start_row = int(h_hrt['PXBEG2']-1)
     start_col = int(h_hrt['PXBEG1']-1)
-    cpos = h_hrt['CONTPOS'] - 1
+    cpos = h_hrt['CONTPOS'] - 1 if 'CONTPOS' in h_hrt else fits_get_sampling(hrt_file)[3]
 
     h_hrt = rotate_header(h_hrt.copy(),-crota_manual_correction, center=center_coord(h_hrt))
 

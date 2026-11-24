@@ -127,7 +127,7 @@ def phihrt_pipe(input_json_file):
     pipeline_dir = os.path.realpath(__file__).split('src/')[0]
     repo = git.Repo(pipeline_dir)
     sha = repo.head.object.hexsha
-    version = 'V1.13.0 June 8th 2026'
+    version = 'V1.14.0 November 24th 2026'
 
     printc('--------------------------------------------------------------',bcolors.OKGREEN)
     printc('PHI HRT data reduction software  ',bcolors.OKGREEN)
@@ -1216,7 +1216,7 @@ def phihrt_pipe(input_json_file):
             htemp = hdr_arr[scan].copy()
             if limb_temp is not None:
                 printc('-->>>>>>> Running WCS correction with limb fitting',bcolors.OKGREEN)
-                hdr_arr[scan], good = correct_wcs_with_limb(data[:,:,0,cpos_arr[0],scan], htemp, field_stop[rows,cols], AR_mask[:,:,scan], 0, 0.15)
+                hdr_arr[scan], good = correct_wcs_with_limb(data[:,:,0,cpos_arr[0],scan], htemp, field_stop[rows,cols], AR_mask[:,:,scan], 0.15, 0)
                 if good:
                     add_history = 'WCS updated by HRT pipeline using a more precise limb fitting. Check parent file for old WCS'
                     hdr_arr[scan]['CAL_WCS'] = True

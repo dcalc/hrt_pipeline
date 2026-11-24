@@ -1213,7 +1213,7 @@ def phi_disambig(bazi,bamb,method=2):
         bamb = fits.getdata(bamb)
     #      
     #flag=int.from_bytes(bamb[0,:,:], "little", signed=False)
-    flag=bamb[0,:,:] 
+    flag=bamb[0,:,:] if bamb.ndim == 3 else bamb.copy()
     #
     #disambig = flag/(2**method)
     disambig = flag >> method # x shifted right by n bits as from https://docs.python.org/3/library/stdtypes.html
@@ -1222,3 +1222,115 @@ def phi_disambig(bazi,bamb,method=2):
     #
     return disbazi
 
+def phi_b2ptr(bmag, binc, bazi, header = None, longitude = True, xyz = False, crota_manual = 0):
+    """
+    Equivalent Python translation of IDL's phi_b2ptr.pro.
+    Args:
+        bmag : sunpy.map.Map or np.ndarray of the magnetic field stregth (G)
+        binc : sunpy.map.Map or np.ndarray  of the magnetic field inclination (deg)
+        bazi : sunpy.map.Map or np.ndarray  of the magnetic field disambiguated azimuth (deg)
+        header : fits.Header of the sunpy map. Required if bmag is a np.ndarray (Default: None)
+        longitude : if True, remove the S/C longitude (Default: True)
+        xyz : if True, compute the Heliocentric Cartesian XYZ components (eq. 12 in X. Sun 2022) (Default: False)
+        crota_manual : int, manual_setting of CROTA if it is not 0 (Default: 0). 
+                       It is necessary if the map has been rotated and CROTA has been removed. In this case set it to [old]CROTA.
+    Returns:
+        bptr : 3D numpy array of shape (ny, nx, 3) with Heliographic field components 
+               [Bp, Bt, Br (G); Bp is positive when pointing west; Bt is positive when pointing north]
+        lonlat : 3D numpy array of shape (nx, ny, 2)
+        aa : transformation matrix as a (ny,nx,3,3) array
+        bxyz : 3D numpy array (same shape as bptr) with Heliocentric field components [BX, BY, BZ] (G)
+        mm : transformation matrix (ny,nx,3,3) used to obtain bxyz 
+    """
+    from sunpy.map import all_coordinates_from_map, Map
+
+    if header is not None and isinstance(bmag,np.ndarray):
+        bmag = Map((bmag,header))
+    if not isinstance(binc,np.ndarray):
+        binc = binc.data.copy()
+    if not isinstance(bazi,np.ndarray):
+        bazi = bazi.data.copy()
+
+    # Check dimensions
+    ny, nx = bmag.data.shape
+    if header is None: header = bmag.fits_header
+
+    # Convert bvec to B_xi, B_eta, B_zeta
+    field = bmag.data
+    gamma = np.deg2rad(binc)
+    psi = np.deg2rad(bazi + 90) # azimuth is now 0 when parallel to x axis
+
+    b_xi = field * np.sin(gamma) * np.cos(psi)
+    b_eta = field * np.sin(gamma) * np.sin(psi)
+    b_zeta = field * np.cos(gamma)
+
+    # Get Stonyhurst lon/lat
+    all_coords = all_coordinates_from_map(bmag).heliographic_stonyhurst
+    phi, lambd = all_coords.lon.value, all_coords.lat.value
+
+    lonlat = np.zeros((2, ny, nx), dtype=np.float32)
+    lonlat[0] = phi
+    lonlat[1] = lambd
+
+    # Get angles
+    b = np.deg2rad(header['CRLT_OBS']) # disk center latitude
+    crota = header.get('CROTA', header.get('CROTA2'))
+    if crota_manual:
+            crota = crota_manual
+    if crota is None:
+        warnings.warn('CROTA and CROTA2 not found. It is very likely that the map has been rotated.\nIf that is the case, set `crota_manual` equals to the original crota.',UserWarning)
+        crota = np.atan2(header['PC2_1'],header['PC1_1']) * 180/np.pi
+    
+    p = -np.deg2rad(crota) # p-angle
+
+    phi0 = header.get('HGLN_OBS',bmag.observer_coordinate.heliographic_stonyhurst.lon.value) if longitude else 0 # image center longitude
+    phi = np.deg2rad(phi - phi0) # phi0 needed to set to 0 the central meridian
+    lambd = np.deg2rad(lambd)
+
+    sinb = np.sin(b)
+    cosb = np.cos(b)
+    sinp = np.sin(p)
+    cosp = np.cos(p)
+    sinphi = np.sin(phi)
+    cosphi = np.cos(phi)
+    sinlam = np.sin(lambd)
+    coslam = np.cos(lambd)
+
+    # Compute transformation matrix elements
+    aa = np.zeros((ny, nx, 3, 3))
+    aa[...,2,0] = coslam * (sinb * sinp * cosphi + cosp * sinphi) - sinlam * cosb * sinp
+    aa[...,2,1] = -coslam * (sinb * cosp * cosphi - sinp * sinphi) + sinlam * cosb * cosp
+    aa[...,2,2] = coslam * cosb * cosphi + sinlam * sinb
+
+    aa[...,1,0] = -sinlam * (sinb * sinp * cosphi + cosp * sinphi) - coslam * cosb * sinp
+    aa[...,1,1] = sinlam * (sinb * cosp * cosphi - sinp * sinphi) + coslam * cosb * cosp
+    aa[...,1,2] = -sinlam * cosb * cosphi + coslam * sinb
+
+    aa[...,0,0] = -sinb * sinp * sinphi + cosp * cosphi
+    aa[...,0,1] = sinb * cosp * sinphi + sinp * cosphi
+    aa[...,0,2] = -cosb * sinphi
+
+    # Apply the transformation
+    bptr =  np.einsum('xyij,jxy->ixy', aa, np.array([b_xi, b_eta, b_zeta]))
+    del aa
+    
+    if xyz:
+        mm = np.zeros((ny, nx, 3, 3))
+        mm[...,2,0] = -cosb * sinp
+        mm[...,2,1] = cosb * cosp
+        mm[...,2,2] = sinb
+        
+        mm[...,1,0] = cosp
+        mm[...,1,1] = sinp
+        mm[...,1,2] = 0
+        
+        mm[...,0,0] = sinb * sinp
+        mm[...,0,1] = -sinb * cosp
+        mm[...,0,2] = cosb
+
+        bxyz =  np.einsum('xyij,jxy->ixy', mm, np.array([b_xi, b_eta, b_zeta]))
+        del mm
+
+        return bptr, lonlat, bxyz
+    else:  
+        return bptr, lonlat

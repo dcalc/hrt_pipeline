@@ -1,4 +1,5 @@
 import numpy as np
+import traceback
 from matplotlib import pyplot as plt
 from astropy.io import fits
 from .utils import find_nearest, printc, bcolors, image_derivative, get_descriptor
@@ -239,6 +240,8 @@ def correct_wcs_with_limb(img, hdr, field_stop, AR_mask, crota_manual_correction
         good = True
     except Exception as e:
         printc(f"There was an error in the WCS correction using the limb. This is the error: {e}", color=bcolors.FAIL)
+        error_msg = traceback.format_exc()
+        printc(f"This is the error message:\n{error_msg}", color=bcolors.FAIL)
         good = False
         h_hrt = hdr.copy()
     return h_hrt, good

@@ -1309,6 +1309,100 @@ def extract_coefs(tobs,PD_f = '/data/slam/home/calchetti/hrt_pipeline/csv/PD_res
         print(np.round(coefs,5))
     return coefs
 
+def single_image_reconstruction(data, 
+                                coefs,
+                                field_stop,
+                                sly=slice(0,2048),
+                                slx=slice(0,2048),
+                                rest='lofdahl',
+                                low_f=0.8,
+                                gamma2=0.02,
+                                aberr_cor=True,
+                                straylight_corr=True,
+                                wind_opt=True,
+                                ):
+    
+    size = data.shape[0]
+    size_roi = data[sly,slx].shape[0]
+
+    pad_width = int(size*10/(100-10*2))
+    if size != size_roi: pad_width_roi = int(size_roi*10/(100-10*2))
+
+    print('Restoration method:',rest)
+    k = 0
+    im0 = data.copy() / data.mean()
+    im0, _ = edge_masking(im0, field_stop, cavity=None)
+    im0 = np.pad(im0, pad_width=((pad_width, pad_width), (pad_width, pad_width)),\
+                mode='symmetric')
+    N=im0.shape[0]
+    RHO, THETA, ap, nuc, _ = image_constants(N,wvl,fnum,Delta_x)
+    #OTFs
+    Hk,_ = OTF(coefs,0,RHO,THETA,ap,norm=True,K=1,tiptilt=True,straylight_corr=straylight_corr)
+    if aberr_cor:
+        Hk_th,_ = OTF(np.zeros(20),0,RHO,THETA,ap,norm=True,K=1,tiptilt=True,straylight_corr=False)
+    else:
+        Hk_th = None
+    #Restoration
+    Q = Qfactor(Hk,gamma=1,reg=gamma2,nuc=nuc,N=N) # gamma is 1 in restoration only
+    ## 
+
+    noise='default'#Löfdahl & Scharmer's (1994) optimum filter 
+
+    # noise filter from smaller region
+    if size != size_roi:
+        print('-----------> Noise filter from smaller region:',sly,slx)
+        im0_roi = data[sly,slx].copy()
+        im0_roi = np.pad(im0_roi, pad_width=((pad_width_roi, pad_width_roi), (pad_width_roi, pad_width_roi)),\
+                    mode='symmetric')
+        noise=object_estimate(im0_roi,coefs,0,reg=gamma2,wind=wind_opt,low_f=low_f,noise=noise,aberr_cor=aberr_cor,straylight_corr=straylight_corr)[2]
+        noise = cv2.resize(noise.astype('float32'),im0.shape,interpolation=cv2.INTER_LANCZOS4).astype('float64')
+    else:
+        noise=object_estimate(im0,coefs,0,reg=gamma2,wind=wind_opt,low_f=low_f,noise=noise,aberr_cor=aberr_cor,straylight_corr=straylight_corr)[2]
+        
+    # res_im0,_,noise_filt=object_estimate_short(im0,Hk=Hk.copy(),Q=Q.copy(),nuc=nuc,wind=True,low_f=low_f,noise=noise,Hk_th=Hk_th,nbin=nbin)
+
+    N = max(im0.shape)
+    Ok, gamma, wind, susf=prepare_PD(im0,nuc=nuc,N=N,wind=wind_opt)
+
+    Nima=Ok.shape[2]
+    Ok_before_noise = Ok.copy()
+    for i in range(0,Nima):
+        #Filtering in Fourier domain
+        Ok[:,:,i]=noise*Ok[:,:,i]
+
+    #Restoration
+    O=Ffactor(Q,Ok,Hk,gamma=gamma)
+
+    #Apply MTF of ideal telescope
+    if Hk_th is not None:
+        O=Hk_th.copy()[...,0]*O
+
+    Oshift=np.fft.fftshift(O)
+    o=np.fft.ifft2(Oshift)
+    #o=np.fft.fftshift(o)
+    o_restored=N**2*o.real
+    res_im0=o_restored+susf
+
+    res_im0 = res_im0[pad_width:res_im0.shape[0]-pad_width,pad_width:res_im0.shape[1]-pad_width]
+
+    # Ok, gamma, _, _ = prepare_PD(im0,nuc=nuc,N=N,wind=wind_opt)
+    PSF = ifftshift(ifft2(fftshift(Hk.squeeze()))).real[pad_width:im0.shape[0]-pad_width,pad_width:im0.shape[1]-pad_width]
+    
+    return res_im0, locals()
+
+def gaussian_noise(NSR,image):
+    """
+    This function adds Gaussian noise to an image with a
+    given NSR (noise-to-signal ratio)
+    """
+    row,col = image.shape
+    mu  = np.mean(image)
+    sigma= mu*NSR
+    gauss = np.random.normal(0,sigma,(row,col))
+    gauss = gauss.reshape(row,col)
+    noisy = image + gauss
+    return noisy
+
 def fran_restore(stokes_data, tobs, mask=None, sly = slice(0,2048), slx = slice(0,2048), rest='lofdahl', gamma2 = 0.1, low_f=0.1, denoise=False, num_iter=10, aberr_cor = False, straylight_corr=False, padding=True, cavity=None, PD_f = './csv/PD_result.csv', PSF=None, nbin=1):
     #Input parameters
     # mask=None # mask of the field_stop and limb

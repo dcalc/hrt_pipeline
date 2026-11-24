@@ -3,7 +3,7 @@
 Reduction software for SO/PHI-HRT instrument on the ESA Solar Orbiter
 
 ![](https://img.shields.io/badge/License-MIT-green) 
-![](https://img.shields.io/badge/Version-V1.12.0%20April%2023rd%202026-brightgreen)
+![](https://img.shields.io/badge/Version-V1.14.0%20November%2024th%202026-brightgreen)
 ![](https://img.shields.io/badge/OS-Linux-yellow)
 ![](https://img.shields.io/github/last-commit/JonasSinjan/hrt_pipeline)
 ![](https://img.shields.io/github/contributors/JonasSinjan/hrt_pipeline)
@@ -15,23 +15,25 @@ Reduction software for SO/PHI-HRT instrument on the ESA Solar Orbiter
 1. read in science data (+scaling) (one or multiple files)
 2. read in flat field (+scaling) - accepts only one flat field fits file
 3. read in dark field (+scaling)
-4. prefilter correction
-5. apply dark field (to only science - assumes flat is dark fielded)
+4. apply dark field (to only science - assumes flat is dark fielded)
+5. prefilter correction on flat field
 6. clean flat field with unsharp masking (Stokes QUV, UV or V)
 7. normalise flat field
 8. apply flat field
-9. apply field stop
-10. apply hot pixels mask
-11. polarimetric registration
-12. demodulate with const demod matrix <br>
+9. prefilter correction on science data
+10. apply field stop
+11. apply hot pixels mask
+12. polarimetric registration
+13. demodulate with const demod matrix <br>
         a) option to output demod to fits file <br>
-13. normalise to quiet sun
-14. calibration <br>
+14. normalise to quiet sun
+15. calibration <br>
         a) ItoQUV cross talk correction <br>
         b) VtoQU cross talk correction <br>
-15. wavelengths registration
-16. PSF deconvolution
-17. rte inversion with cmilos <br>
+16. wavelengths registration
+17. PSF deconvolution
+18. WCS correction
+19. rte inversion with cmilos <br>
         a) output rte data products to fits files <br>
 
 
